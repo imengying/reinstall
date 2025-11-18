@@ -34,12 +34,12 @@ curl -O https://raw.githubusercontent.com/imengying/reinstall/main/reinstall.sh 
 
 ## ⚠️ 重要安全提示
 
-> **警告：默认密码安全问题**
-> 
-> 本脚本使用默认密码 `123@@@`，**强烈建议**：
-> 1. 首次登录后立即修改密码：`passwd`
-> 2. 或使用 `--ssh-key` 参数设置 SSH 密钥登录（更安全）
-> 3. **切勿在生产环境中长期使用默认密码**
+> **警告：密码安全**
+>
+> > 不输入密码时会自动生成一个 16 位随机密码（安装结束时会展示），为了安全请：
+> > 1. 使用 `--password` 参数显式设置密码，或用 `--ssh-key` 改为密钥登录（推荐）
+> > 2. 首次登录后及时修改密码：`passwd`
+> > 3. 妥善保存随机密码，避免遗失
 > 
 > 示例：使用 SSH 密钥安装
 > ```bash
@@ -69,7 +69,7 @@ bash reinstall.sh debian
 ### 系统特性
 
 - **用户名**: `root`
-- **默认密码**: `123@@@`
+- **默认密码**: 未指定时自动生成 16 位随机密码
 - **文件系统**: Btrfs + Zstd 透明压缩 + noatime
 - **分区**: 最大化利用磁盘空间，不含 boot 分区，不含 swap 分区
 - **SSH**: 重装后如需修改 SSH 端口或改成密钥登录，注意还要修改 `/etc/ssh/sshd_config.d/` 里面的文件
@@ -113,7 +113,7 @@ btrfs balance start -dusage=50 /
 - `--ssh-key KEY` 设置 SSH 登录公钥，[格式如下](#--ssh-key)。当使用公钥时，密码为空
 - `--ssh-port PORT` 修改 SSH 端口（安装期间观察日志用，也作用于新系统）
 - `--web-port PORT` 修改 Web 端口（安装期间观察日志用）
-- `--frpc-toml /path/to/frpc.toml` 添加 frpc 内网穿透
+- `--frpc-toml /path/or/url/to/frpc.toml` 添加 frpc 内网穿透（支持 http/https 链接）
 - `--hold 2` 安装结束后不重启，此时可以 SSH 登录修改系统内容，系统挂载在 `/os`
 
 ### 参数格式
