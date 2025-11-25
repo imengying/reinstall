@@ -5,8 +5,11 @@
 set -eE
 confhome=https://raw.githubusercontent.com/imengying/reinstall/main
 
+# 默认密码
+DEFAULT_PASSWORD=123@@@
+
 # 用于判断 reinstall.sh 和 trans.sh 是否兼容
-SCRIPT_VERSION=4BACD833-A585-23BA-6CBB-9AA4E08E0004
+SCRIPT_VERSION=4BACD833-A585-23BA-6CBB-9AA4E08E0003
 
 # 强制 linux 程序输出英文，防止 grep 不到想要的内容
 # https://www.gnu.org/software/gettext/manual/html_node/The-LANGUAGE-variable.html
@@ -20,11 +23,6 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH
 exec > >(tee >(grep -iv password >>/reinstall.log)) 2>&1
 THIS_SCRIPT=$(readlink -f "$0")
 trap 'trap_err $LINENO $?' ERR
-
-if ! { [ -n "$BASH" ] && [ -n "$BASH_VERSION" ]; }; then
-    echo "Please run this script with bash." >&2
-    exit 1
-fi
 
 trap_err() {
     line_no=$1
@@ -42,7 +40,7 @@ Usage: ./reinstall.sh debian [9|10|11|12|13]
                        [--ssh-key   KEY]
                        [--ssh-port  PORT]
                        [--web-port  PORT]
-                       [--frpc-toml PATH]
+                       [--frpc-toml TOML]
 
 EOF
     exit 1
@@ -87,25 +85,14 @@ error_and_exit() {
     exit 1
 }
 
-show_url_in_args() {
-    while [ $# -gt 0 ]; do
-        case "$1" in
-        [Hh][Tt][Tt][Pp][Ss]://* | [Hh][Tt][Tt][Pp]://* | [Mm][Aa][Gg][Nn][Ee][Tt]:*) echo "$1" ;;
-        esac
-        shift
-    done
-}
-
 curl() {
     is_have_cmd curl || install_pkg curl
-
-    # 显示 url
-    show_url_in_args "$@" >&2
 
     # 添加 -f, --fail，不然 404 退出码也为0
     # 32位 cygwin 已停止更新，证书可能有问题，先添加 --insecure
     # centos 7 curl 不支持 --retry-connrefused --retry-all-errors
     # 因此手动 retry
+    grep -o 'http[^ ]*' <<<"$@" >&2
     for i in $(seq 5); do
         if command curl --insecure --connect-timeout 10 -f "$@"; then
             return
@@ -459,6 +446,101 @@ assert_not_in_container() {
             _error_and_exit
         fi
     fi
+}
+
+# 使用 | del_br ，但返回 del_br 之前返回值
+run_with_del_cr() {
+    if false; then
+        # ash 不支持 PIPESTATUS[n]
+        res=$("$@") && ret=0 || ret=$?
+        echo "$res" | del_cr
+        return $ret
+    else
+        "$@" | del_cr
+        return ${PIPESTATUS[0]}
+    fi
+}
+
+run_with_del_cr_template() {
+    if get_function _$exe >/dev/null; then
+        run_with_del_cr _$exe "$@"
+    else
+        run_with_del_cr command $exe "$@"
+    fi
+}
+
+wmic() {
+    if is_have_cmd wmic; then
+        # 如果参数没有 GET，添加 GET，防止以下报错
+        # wmic memorychip /format:list
+        # 此级别的开关异常。
+        has_get=false
+        for i in "$@"; do
+            # 如果参数有 GET
+            if [ "$(to_upper <<<"$i")" = GET ]; then
+                has_get=true
+                break
+            fi
+        done
+
+        # 输出为 /format:list 格式
+        if $has_get; then
+            command wmic "$@" /format:list
+        else
+            command wmic "$@" get /format:list
+        fi
+        return
+    fi
+
+    # powershell wmi 默认参数
+    local namespace='root\cimv2'
+    local class=
+    local filter=
+    local props=
+
+    # namespace
+    if [[ "$(to_upper <<<"$1")" = /NAMESPACE* ]]; then
+        # 删除引号，删除 \\
+        namespace=$(cut -d: -f2 <<<"$1" | sed -e "s/[\"']//g" -e 's/\\\\//g')
+        shift
+    fi
+
+    # class
+    if [[ "$(to_upper <<<"$1")" = PATH ]]; then
+        class=$2
+        shift 2
+    else
+        case "$(to_lower <<<"$1")" in
+        nicconfig) class=Win32_NetworkAdapterConfiguration ;;
+        memorychip) class=Win32_PhysicalMemory ;;
+        *) class=Win32_$1 ;;
+        esac
+        shift
+    fi
+
+    # filter
+    if [[ "$(to_upper <<<"$1")" = WHERE ]]; then
+        filter=$2
+        shift 2
+    fi
+
+    # props
+    if [[ "$(to_upper <<<"$1")" = GET ]]; then
+        props=$2
+        shift 2
+    fi
+
+    if ! [ -f "$tmp/wmic.ps1" ]; then
+        curl -Lo "$tmp/wmic.ps1" "$confhome/wmic.ps1"
+    fi
+
+    # shellcheck disable=SC2046
+    powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+        -File "$(cygpath -w "$tmp/wmic.ps1")" \
+        -Namespace "$namespace" \
+        -Class "$class" \
+        $([ -n "$filter" ] && echo -Filter "$filter") \
+        $([ -n "$props" ] && echo -Properties "$props")
 }
 
 is_virt() {
@@ -1133,23 +1215,16 @@ trim() {
 
 prompt_password() {
     info "prompt password"
-    warn false "Leave blank to use a random password."
-    warn false "不填写则使用随机密码"
     while true; do
-        IFS= read -r -p "Password: " password
-        if [ -n "$password" ]; then
-            IFS= read -r -p "Retype password: " password_confirm
-            if [ "$password" = "$password_confirm" ]; then
-                break
-            else
-                error "Passwords don't match. Try again."
-            fi
+        IFS= read -r -p "Password [$DEFAULT_PASSWORD]: " password
+        IFS= read -r -p "Retype password [$DEFAULT_PASSWORD]: " password_confirm
+        password=${password:-$DEFAULT_PASSWORD}
+        password_confirm=${password_confirm:-$DEFAULT_PASSWORD}
+        if [ -z "$password" ]; then
+            error "Passwords is empty. Try again."
+        elif [ "$password" != "$password_confirm" ]; then
+            error "Passwords don't match. Try again."
         else
-            # 特殊字符列表
-            # https://learn.microsoft.com/previous-versions/windows/it-pro/windows-server-2012-r2-and-2012/hh994562(v=ws.11)
-            # 有的机器运行 centos 7 ，用 /dev/random 产生 16 位密码，开启了 rngd 也要 5 秒，关闭了 rngd 则长期阻塞
-            chars=\''A-Za-z0-9~!@#$%^&*_=+`|(){}[]:;"<>,.?/-'
-            password=$(tr -dc "$chars" </dev/urandom | head -c16)
             break
         fi
     done
@@ -2183,14 +2258,9 @@ for o in ci installer debug minimal allow-ping force-cn help \
 done
 
 # 整理参数
-if ! opts=$(getopt -n $0 -o "hx" --long "$long_opts" -- "$@"); then
+if ! opts=$(getopt -n $0 -o "h" --long "$long_opts" -- "$@"); then
     exit
 fi
-
-# /tmp 挂载在内存的话，可能不够空间
-# 处理 --frpc--toml 时会下载文件，因此在处理参数前就创建临时目录
-tmp=/reinstall-tmp
-mkdir_clear "$tmp"
 
 eval set -- "$opts"
 # shellcheck disable=SC2034
@@ -2199,7 +2269,7 @@ while true; do
     -h | --help)
         usage_and_exit
         ;;
-    -x | --debug)
+    --debug)
         set -x
         shift
         ;;
@@ -2227,7 +2297,7 @@ while true; do
         shift
         ;;
     --hold | --sleep)
-        if ! { [ "$2" = 0 ] || [ "$2" = 1 ] || [ "$2" = 2 ]; }; then
+        if ! { [ "$2" = 1 ] || [ "$2" = 2 ]; }; then
             error_and_exit "Invalid $1 value: $2"
         fi
         hold=$2
@@ -2236,21 +2306,15 @@ while true; do
     --frpc-conf | --frpc-config | --frpc-toml)
         [ -n "$2" ] || error_and_exit "Need value for $1"
 
-        case "$(to_lower <<<"$2")" in
-        http://* | https://*)
-            frpc_config_url=$2
-            frpc_config=$tmp/frpc_config
-            if ! curl -L "$frpc_config_url" -o "$frpc_config"; then
-                error_and_exit "Can't get frpc config from $frpc_config_url"
-            fi
-            ;;
-        *)
-            # windows 路径转换
-            if ! { frpc_config=$(get_unix_path "$2") && [ -f "$frpc_config" ]; }; then
-                error_and_exit "File not exists: $2"
-            fi
-            ;;
-        esac
+        frpc_config=$(get_unix_path "$2")
+
+        # alpine busybox 不支持 readlink -m
+        # readlink -m /asfsafasfsaf/fasf
+        # 因此需要先判断路径是否存在
+
+        if ! [ -f "$frpc_config" ]; then
+            error_and_exit "Not a toml file: $2"
+        fi
 
         # 转为绝对路径
         frpc_config=$(readlink -f "$frpc_config")
@@ -2379,6 +2443,10 @@ fi
 
 # 必备组件
 install_pkg curl grep
+
+# /tmp 挂载在内存的话，可能不够空间
+tmp=/reinstall-tmp
+mkdir_clear "$tmp"
 
 # Debian 不强制 --ci 参数，保留用户选择
 

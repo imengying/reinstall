@@ -339,9 +339,8 @@ EOF
     db_progress INFO netcfg/link_detect_progress
 else
     # alpine
-    # h3c 移动云电脑使用 udhcpc 会重复提示 sending select，无法获得 ipv6
-    # dhcpcd 会配置租约时间，过期会移除 IP，但我们的没有在后台运行 dhcpcd ，因此用 udhcpc
-    method=udhcpc
+    # h3c 移动云电脑使用 udhcpc 会重复提示 sending select，无法获得 ipv6，因此使用 dhcpcd
+    method=dhcpcd
 
     case "$method" in
     udhcpc)
