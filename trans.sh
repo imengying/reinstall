@@ -3045,52 +3045,70 @@ create_network_manager_config() {
 fix_btrfs_compression_for_dd() {
     info "Fix Btrfs compression for DD"
     
+    local mount_point=/mnt/btrfs_fix
+    local fstab_modified=false
+    
     # 遍历所有分区，寻找 Btrfs 文件系统
-    for part in $(lsblk /dev/$xda*[0-9] --sort SIZE -no NAME | tac); do
+    for part in $(lsblk /dev/$xda*[0-9] --sort SIZE -no NAME 2>/dev/null | tac); do
         fs_type=$(lsblk -no FSTYPE /dev/$part 2>/dev/null)
         if [ "$fs_type" = "btrfs" ]; then
             info "Found Btrfs partition: /dev/$part"
             
-            # 尝试直接挂载
-            mkdir -p /mnt/btrfs_fix
-            if mount /dev/$part /mnt/btrfs_fix 2>/dev/null; then
-                # 检查 fstab 是否存在
-                if [ -f /mnt/btrfs_fix/etc/fstab ]; then
-                    info "Found fstab at /mnt/btrfs_fix/etc/fstab"
-                    if grep -qw btrfs /mnt/btrfs_fix/etc/fstab; then
-                        # 添加 compress=zstd
-                        sed -i '/btrfs/ { /compress=zstd/! s/\(btrfs[[:space:]]\+[^[:space:]]\+\)/\1,compress=zstd/ }' /mnt/btrfs_fix/etc/fstab
-                        info "Added compress=zstd to fstab"
-                        cat /mnt/btrfs_fix/etc/fstab
-                    fi
-                # 如果直接挂载没有 fstab，尝试挂载子卷
-                elif btrfs subvolume list /mnt/btrfs_fix 2>/dev/null | grep -q .; then
-                    info "Checking Btrfs subvolumes..."
-                    umount /mnt/btrfs_fix
-                    
-                    # 尝试常见的子卷名
-                    for subvol in @ @rootfs root; do
-                        if mount -o subvol=$subvol /dev/$part /mnt/btrfs_fix 2>/dev/null; then
-                            if [ -f /mnt/btrfs_fix/etc/fstab ]; then
-                                info "Found fstab in subvol=$subvol"
-                                if grep -qw btrfs /mnt/btrfs_fix/etc/fstab; then
-                                    sed -i '/btrfs/ { /compress=zstd/! s/\(btrfs[[:space:]]\+[^[:space:]]\+\)/\1,compress=zstd/ }' /mnt/btrfs_fix/etc/fstab
-                                    info "Added compress=zstd to fstab"
-                                    cat /mnt/btrfs_fix/etc/fstab
-                                fi
-                                umount /mnt/btrfs_fix
-                                rmdir /mnt/btrfs_fix
-                                return
-                            fi
-                            umount /mnt/btrfs_fix
-                        fi
-                    done
+            mkdir -p $mount_point
+            
+            # 尝试不同的挂载方式
+            for mount_opt in "" "subvol=@" "subvol=@rootfs" "subvol=root" "subvol=/"; do
+                umount $mount_point 2>/dev/null || true
+                
+                if [ -n "$mount_opt" ]; then
+                    mount -o $mount_opt /dev/$part $mount_point 2>/dev/null || continue
+                    info "Mounted with $mount_opt"
+                else
+                    mount /dev/$part $mount_point 2>/dev/null || continue
+                    info "Mounted without subvol option"
                 fi
-                umount /mnt/btrfs_fix 2>/dev/null || true
-            fi
-            rmdir /mnt/btrfs_fix 2>/dev/null || true
+                
+                # 检查 fstab 是否存在
+                if [ -f $mount_point/etc/fstab ]; then
+                    info "Found fstab, current content:"
+                    cat $mount_point/etc/fstab
+                    
+                    # 检查是否已有 compress=zstd
+                    if grep -q 'compress=zstd' $mount_point/etc/fstab; then
+                        info "compress=zstd already present"
+                        fstab_modified=true
+                    elif grep -qw btrfs $mount_point/etc/fstab; then
+                        # 使用简单的 sed 替换：在 btrfs 行的选项字段后添加 ,compress=zstd
+                        # 选项字段是第4列
+                        awk '
+                            /btrfs/ && !/compress=zstd/ {
+                                $4 = $4 ",compress=zstd"
+                            }
+                            { print }
+                        ' $mount_point/etc/fstab > $mount_point/etc/fstab.new
+                        mv $mount_point/etc/fstab.new $mount_point/etc/fstab
+                        
+                        info "Added compress=zstd, new content:"
+                        cat $mount_point/etc/fstab
+                        fstab_modified=true
+                    fi
+                    
+                    if $fstab_modified; then
+                        umount $mount_point 2>/dev/null || true
+                        rmdir $mount_point 2>/dev/null || true
+                        return
+                    fi
+                fi
+            done
+            
+            umount $mount_point 2>/dev/null || true
+            rmdir $mount_point 2>/dev/null || true
         fi
     done
+    
+    if ! $fstab_modified; then
+        warn "Could not find or modify fstab for Btrfs compression"
+    fi
 }
 
 modify_linux() {
