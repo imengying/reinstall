@@ -2426,9 +2426,10 @@ create_part() {
         if [ "$distro" = centos ] || [ "$distro" = almalinux ] || [ "$distro" = rocky ] ||
             [ "$distro" = oracle ] || [ "$distro" = redhat ] ||
             [ "$distro" = anolis ] || [ "$distro" = opencloudos ] || [ "$distro" = openeuler ] ||
-            [ "$distro" = ubuntu ]; then
+            [ "$distro" = ubuntu ] || [ "$distro" = debian ]; then
             # 这里的 fs 没有用，最终使用目标系统的格式化工具
             fs=ext4
+            [ "$distro" = debian ] && fs=btrfs
             if is_efi; then
                 parted /dev/$xda -s -- \
                     mklabel gpt \
@@ -3040,87 +3041,9 @@ create_network_manager_config() {
     done
 }
 
-# 专门为 DD 模式处理 Btrfs 压缩
-# 处理可能有子卷的情况
-fix_btrfs_compression_for_dd() {
-    info "Fix Btrfs compression for DD"
-    
-    local mount_point=/mnt/btrfs_fix
-    local fstab_modified=false
-    
-    # 遍历所有分区，寻找 Btrfs 文件系统
-    for part in $(lsblk /dev/$xda*[0-9] --sort SIZE -no NAME 2>/dev/null | tac); do
-        fs_type=$(lsblk -no FSTYPE /dev/$part 2>/dev/null)
-        if [ "$fs_type" = "btrfs" ]; then
-            info "Found Btrfs partition: /dev/$part"
-            
-            mkdir -p $mount_point
-            
-            # 尝试不同的挂载方式
-            for mount_opt in "" "subvol=@" "subvol=@rootfs" "subvol=root" "subvol=/"; do
-                umount $mount_point 2>/dev/null || true
-                
-                if [ -n "$mount_opt" ]; then
-                    mount -o $mount_opt /dev/$part $mount_point 2>/dev/null || continue
-                    info "Mounted with $mount_opt"
-                else
-                    mount /dev/$part $mount_point 2>/dev/null || continue
-                    info "Mounted without subvol option"
-                fi
-                
-                # 检查 fstab 是否存在
-                if [ -f $mount_point/etc/fstab ]; then
-                    info "Found fstab, current content:"
-                    cat $mount_point/etc/fstab
-                    
-                    # 检查是否已有 compress=zstd
-                    if grep -q 'compress=zstd' $mount_point/etc/fstab; then
-                        info "compress=zstd already present"
-                        fstab_modified=true
-                    elif grep -qw btrfs $mount_point/etc/fstab; then
-                        # 使用简单的 sed 替换：在 btrfs 行的选项字段后添加 ,compress=zstd
-                        # 选项字段是第4列
-                        awk '
-                            /btrfs/ && !/compress=zstd/ {
-                                $4 = $4 ",compress=zstd"
-                            }
-                            { print }
-                        ' $mount_point/etc/fstab > $mount_point/etc/fstab.new
-                        mv $mount_point/etc/fstab.new $mount_point/etc/fstab
-                        
-                        info "Added compress=zstd, new content:"
-                        cat $mount_point/etc/fstab
-                        fstab_modified=true
-                    fi
-                    
-                    if $fstab_modified; then
-                        umount $mount_point 2>/dev/null || true
-                        rmdir $mount_point 2>/dev/null || true
-                        return
-                    fi
-                fi
-            done
-            
-            umount $mount_point 2>/dev/null || true
-            rmdir $mount_point 2>/dev/null || true
-        fi
-    done
-    
-    if ! $fstab_modified; then
-        warn "Could not find or modify fstab for Btrfs compression"
-    fi
-}
-
 modify_linux() {
     os_dir=$1
     info "Modify Linux"
-
-    # 强制开启 Btrfs Zstd 压缩
-    if grep -qw btrfs "$os_dir/etc/fstab"; then
-        sed -i 's/\(btrfs[[:space:]]\+\)\([^[:space:]]\+\)/\1\2,compress=zstd/' "$os_dir/etc/fstab"
-        # 防止重复添加
-        sed -i 's/,compress=zstd,compress=zstd/,compress=zstd/g' "$os_dir/etc/fstab"
-    fi
 
     find_and_mount() {
         mount_point=$1
@@ -3546,7 +3469,10 @@ modify_os_on_disk() {
 
     update_part
 
-
+    # dd linux 的时候不用修改硬盘内容
+    if [ "$distro" = "dd" ]; then
+        return
+    fi
 
     mkdir -p /os
     # 按分区容量大到小，依次寻找系统分区
@@ -3566,10 +3492,6 @@ modify_os_on_disk() {
             umount /os
         fi
     done
-    if [ "$distro" = "dd" ]; then
-        warn "Can't find os partition."
-        return
-    fi
     error_and_exit "Can't find os partition."
 }
 
@@ -4709,9 +4631,17 @@ EOF
     # centos8 如果用alpine格式化xfs，grub2-mkconfig和grub2里面都无法识别xfs分区
     mount_nouuid /dev/$os_part /nbd/
     mount_pseudo_fs /nbd/
-    case "$os_part_fstype" in
+    target_fs=$os_part_fstype
+    if [ "$distro" = debian ]; then
+        target_fs=btrfs
+    fi
+    case "$target_fs" in
     ext4) chroot /nbd mkfs.ext4 -F -L "$os_part_label" -U "$os_part_uuid" /dev/$xda*2 ;;
     xfs) chroot /nbd mkfs.xfs -f -L "$os_part_label" -m uuid=$os_part_uuid /dev/$xda*2 ;;
+    btrfs)
+        apk add btrfs-progs
+        mkfs.btrfs -f -L "$os_part_label" -U "$os_part_uuid" /dev/$xda*2
+        ;;
     esac
     umount -R /nbd/
 
@@ -4719,7 +4649,9 @@ EOF
 
     # 创建并挂载 /os
     mkdir -p /os
-    mount -o noatime /dev/$xda*2 /os/
+    mount_opts=noatime
+    [ "$distro" = debian ] && mount_opts=compress=zstd
+    mount -o $mount_opts /dev/$xda*2 /os/
 
     # 如果是 efi 则创建 /os/boot/efi
     # 如果镜像有 efi 分区也创建 /os/boot/efi，用于复制 efi 分区的文件
@@ -4795,7 +4727,7 @@ EOF
 
     # 重新挂载 /os /boot/efi
     info "Re-mount disk"
-    mount -o noatime /dev/$xda*2 /os/
+    mount -o $mount_opts /dev/$xda*2 /os/
     if is_efi; then
         mount -o $efi_mount_opts /dev/$xda*1 /os/boot/efi/
     fi
@@ -4806,7 +4738,20 @@ EOF
     # 挂载伪文件系统
     mount_pseudo_fs /os/
 
+    if [ "$distro" = debian ]; then
+        root_uuid=$(lsblk /dev/$xda*2 -no UUID)
+        if grep -qE '^[^#][^[:space:]]+[[:space:]]+/[[:space:]]' /os/etc/fstab; then
+            sed -Ei "s@^[^#][^[:space:]]+[[:space:]]+/[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+@UUID=$root_uuid / btrfs compress=zstd@" /os/etc/fstab
+        else
+            echo "UUID=$root_uuid / btrfs compress=zstd 0 0" >>/os/etc/fstab
+        fi
+
+        chroot_apt_install /os btrfs-progs
+        chroot /os update-initramfs -u
+    fi
+
     case "$distro" in
+    debian) modify_linux /os ;;
     ubuntu) modify_ubuntu ;;
     *) modify_el_ol ;;
     esac
@@ -5447,7 +5392,7 @@ trans() {
             create_part
             download_qcow
             case "$distro" in
-            centos | almalinux | rocky | oracle | redhat | anolis | opencloudos | openeuler)
+            centos | almalinux | rocky | oracle | redhat | anolis | opencloudos | openeuler | debian)
                 # 这几个系统云镜像系统盘是8~9g xfs，而我们的目标是能在5g硬盘上运行，因此改成复制系统文件
                 install_qcow_by_copy
                 ;;
@@ -5456,7 +5401,7 @@ trans() {
                 install_qcow_by_copy
                 ;;
             *)
-                # debian fedora opensuse arch gentoo any
+                # fedora opensuse arch gentoo any
                 dd_qcow
                 resize_after_install_cloud_image
                 modify_os_on_disk linux
@@ -5479,8 +5424,6 @@ trans() {
                 resize_after_install_cloud_image
             fi
             modify_os_on_disk linux
-            # 专门处理 Btrfs 子卷挂载的压缩设置
-            fix_btrfs_compression_for_dd
             ;;
         qemu) # dd qemu 不可能到这里，因为上面已处理
             ;;
