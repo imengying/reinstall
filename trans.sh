@@ -3040,6 +3040,59 @@ create_network_manager_config() {
     done
 }
 
+# 专门为 DD 模式处理 Btrfs 压缩
+# 处理可能有子卷的情况
+fix_btrfs_compression_for_dd() {
+    info "Fix Btrfs compression for DD"
+    
+    # 遍历所有分区，寻找 Btrfs 文件系统
+    for part in $(lsblk /dev/$xda*[0-9] --sort SIZE -no NAME | tac); do
+        fs_type=$(lsblk -no FSTYPE /dev/$part 2>/dev/null)
+        if [ "$fs_type" = "btrfs" ]; then
+            info "Found Btrfs partition: /dev/$part"
+            
+            # 尝试直接挂载
+            mkdir -p /mnt/btrfs_fix
+            if mount /dev/$part /mnt/btrfs_fix 2>/dev/null; then
+                # 检查 fstab 是否存在
+                if [ -f /mnt/btrfs_fix/etc/fstab ]; then
+                    info "Found fstab at /mnt/btrfs_fix/etc/fstab"
+                    if grep -qw btrfs /mnt/btrfs_fix/etc/fstab; then
+                        # 添加 compress=zstd
+                        sed -i '/btrfs/ { /compress=zstd/! s/\(btrfs[[:space:]]\+[^[:space:]]\+\)/\1,compress=zstd/ }' /mnt/btrfs_fix/etc/fstab
+                        info "Added compress=zstd to fstab"
+                        cat /mnt/btrfs_fix/etc/fstab
+                    fi
+                # 如果直接挂载没有 fstab，尝试挂载子卷
+                elif btrfs subvolume list /mnt/btrfs_fix 2>/dev/null | grep -q .; then
+                    info "Checking Btrfs subvolumes..."
+                    umount /mnt/btrfs_fix
+                    
+                    # 尝试常见的子卷名
+                    for subvol in @ @rootfs root; do
+                        if mount -o subvol=$subvol /dev/$part /mnt/btrfs_fix 2>/dev/null; then
+                            if [ -f /mnt/btrfs_fix/etc/fstab ]; then
+                                info "Found fstab in subvol=$subvol"
+                                if grep -qw btrfs /mnt/btrfs_fix/etc/fstab; then
+                                    sed -i '/btrfs/ { /compress=zstd/! s/\(btrfs[[:space:]]\+[^[:space:]]\+\)/\1,compress=zstd/ }' /mnt/btrfs_fix/etc/fstab
+                                    info "Added compress=zstd to fstab"
+                                    cat /mnt/btrfs_fix/etc/fstab
+                                fi
+                                umount /mnt/btrfs_fix
+                                rmdir /mnt/btrfs_fix
+                                return
+                            fi
+                            umount /mnt/btrfs_fix
+                        fi
+                    done
+                fi
+                umount /mnt/btrfs_fix 2>/dev/null || true
+            fi
+            rmdir /mnt/btrfs_fix 2>/dev/null || true
+        fi
+    done
+}
+
 modify_linux() {
     os_dir=$1
     info "Modify Linux"
@@ -5408,6 +5461,8 @@ trans() {
                 resize_after_install_cloud_image
             fi
             modify_os_on_disk linux
+            # 专门处理 Btrfs 子卷挂载的压缩设置
+            fix_btrfs_compression_for_dd
             ;;
         qemu) # dd qemu 不可能到这里，因为上面已处理
             ;;
