@@ -3044,6 +3044,13 @@ modify_linux() {
     os_dir=$1
     info "Modify Linux"
 
+    # 强制开启 Btrfs Zstd 压缩
+    if grep -qw btrfs "$os_dir/etc/fstab"; then
+        sed -i 's/\(btrfs[[:space:]]\+\)\([^[:space:]]\+\)/\1\2,compress=zstd/' "$os_dir/etc/fstab"
+        # 防止重复添加
+        sed -i 's/,compress=zstd,compress=zstd/,compress=zstd/g' "$os_dir/etc/fstab"
+    fi
+
     find_and_mount() {
         mount_point=$1
         mount_dev=$(awk "\$2==\"$mount_point\" {print \$1}" $os_dir/etc/fstab)
@@ -3468,10 +3475,7 @@ modify_os_on_disk() {
 
     update_part
 
-    # dd linux 的时候不用修改硬盘内容
-    if [ "$distro" = "dd" ]; then
-        return
-    fi
+
 
     mkdir -p /os
     # 按分区容量大到小，依次寻找系统分区
@@ -3491,6 +3495,10 @@ modify_os_on_disk() {
             umount /os
         fi
     done
+    if [ "$distro" = "dd" ]; then
+        warn "Can't find os partition."
+        return
+    fi
     error_and_exit "Can't find os partition."
 }
 

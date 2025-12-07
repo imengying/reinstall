@@ -66,6 +66,20 @@ bash reinstall.sh debian [9|10|11|12|13]
 bash reinstall.sh debian
 ```
 
+### DD 安装
+
+安装 Debian 官方/第三方镜像（可享受 Btrfs + Zstd 压缩）：
+
+```bash
+bash reinstall.sh dd "IMG_URL"
+```
+
+> [!NOTE]
+>
+> 即使是 DD 安装，如果目标镜像是 Debian 系统，脚本也会尝试自动挂载并启用 Btrfs + Zstd 透明压缩，从而节省磁盘空间。
+> 
+> **注意**：仅当您 DD 的原始镜像本身也使用 Btrfs 文件系统时，压缩才会生效（取决于镜像制作方式），或者本脚本能成功识别并修正挂载选项。对于非 Debian 镜像，将原样写入（不保证支持其他系统）。
+
 ### 系统特性
 
 - **用户名**: `root`
@@ -164,13 +178,12 @@ compsize /
 - ✅ **只保留 Debian 支持**：移除了其他 Linux 发行版和 Windows 支持
 - ✅ **强制使用 Btrfs**：所有安装自动使用 Btrfs 文件系统
 - ✅ **启用 Zstd 压缩**：自动开启透明压缩，节省 20-50% 磁盘空间
+- ✅ **DD 支持**：支持 `dd` 命令安装任意镜像，并针对 Linux 镜像尝试开启 Zstd 压缩
 - ✅ **代码精简**：从 40+ 个文件精简到 17 个核心文件
 - ✅ **配置优化**：使用 `compress=zstd,noatime` 挂载选项
 
 如果您需要：
-- 安装其他 Linux 发行版（AlmaLinux、Alpine、Arch、Ubuntu 等）
 - 安装 Windows 系统
-- DD 镜像功能
 - 更多高级功能
 
 请使用原项目：[https://github.com/bin456789/reinstall](https://github.com/bin456789/reinstall)
