@@ -3045,6 +3045,19 @@ modify_linux() {
     os_dir=$1
     info "Modify Linux"
 
+    # 强制开启 Btrfs Zstd 压缩 (适用于 DD 和 Debian 安装)
+    if [ -f "$os_dir/etc/fstab" ] && grep -qw btrfs "$os_dir/etc/fstab"; then
+        if ! grep -q 'compress=zstd' "$os_dir/etc/fstab"; then
+            info "Adding compress=zstd to fstab"
+            sed -i '/btrfs/ s/\(defaults[^[:space:]]*\)/\1,compress=zstd/' "$os_dir/etc/fstab"
+            # 如果没有 defaults，尝试在选项字段后添加
+            if ! grep -q 'compress=zstd' "$os_dir/etc/fstab"; then
+                sed -i '/btrfs/ s/\(btrfs[[:space:]]\+[^[:space:]]\+\)/\1,compress=zstd/' "$os_dir/etc/fstab"
+            fi
+            cat "$os_dir/etc/fstab"
+        fi
+    fi
+
     find_and_mount() {
         mount_point=$1
         mount_dev=$(awk "\$2==\"$mount_point\" {print \$1}" $os_dir/etc/fstab)
@@ -3469,10 +3482,7 @@ modify_os_on_disk() {
 
     update_part
 
-    # dd linux 的时候不用修改硬盘内容
-    if [ "$distro" = "dd" ]; then
-        return
-    fi
+
 
     mkdir -p /os
     # 按分区容量大到小，依次寻找系统分区
@@ -3492,6 +3502,11 @@ modify_os_on_disk() {
             umount /os
         fi
     done
+    # DD 模式下如果找不到系统分区只警告不报错
+    if [ "$distro" = "dd" ]; then
+        warn "Can't find os partition for modification, skipping."
+        return
+    fi
     error_and_exit "Can't find os partition."
 }
 

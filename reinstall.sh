@@ -1508,7 +1508,9 @@ install_grub_linux_efi() {
     # dl.fedoraproject.org 不支持 ipv6
 
     if [ "$efi_distro" = fedora ]; then
-        fedora_ver=$(get_latest_distro_releasever fedora)
+        # 使用固定的 Fedora 版本，因为本脚本只支持 Debian
+        # get_latest_distro_releasever 无法解析 Fedora 版本
+        fedora_ver=41
 
         if is_in_china; then
             mirror=https://mirror.nju.edu.cn/fedora
