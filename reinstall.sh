@@ -5,9 +5,6 @@
 set -eE
 confhome=https://raw.githubusercontent.com/imengying/reinstall/main
 
-# 默认密码
-DEFAULT_PASSWORD=123@@@
-
 # 用于判断 reinstall.sh 和 trans.sh 是否兼容
 SCRIPT_VERSION=4BACD833-A585-23BA-6CBB-9AA4E08E0003
 
@@ -18,6 +15,22 @@ export LC_ALL=C
 # 处理部分用户用 su 切换成 root 导致环境变量没 sbin 目录
 # 也能处理 cygwin bash 没有添加 -l 运行 reinstall.sh
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH
+
+# 如果不是 bash 的话，继续执行会有语法错误，因此在这里判断是否 bash
+if [ -z "$BASH" ]; then
+    if [ -f /etc/alpine-release ]; then
+        if ! apk add bash; then
+            echo "Error while install bash." >&2
+            exit 1
+        fi
+    fi
+    if command -v bash >/dev/null; then
+        exec bash "$0" "$@"
+    else
+        echo "Please run this script with bash." >&2
+        exit 1
+    fi
+fi
 
 # 记录日志，过滤含有 password 的行
 exec > >(tee >(grep -iv password >>/reinstall.log)) 2>&1
@@ -40,7 +53,7 @@ Usage: ./reinstall.sh debian [9|10|11|12|13]
                        [--ssh-key   KEY]
                        [--ssh-port  PORT]
                        [--web-port  PORT]
-                       [--frpc-toml TOML]
+                       [--frpc-toml PATH]
 
 EOF
     exit 1
@@ -83,6 +96,13 @@ echo_color_text() {
 error_and_exit() {
     error "$@"
     exit 1
+}
+
+show_dd_password_tips() {
+    warn false "
+这个密码仅用于安装过程中通过 SSH 查看日志。
+镜像本身的密码不会被修改。
+"
 }
 
 curl() {
@@ -1215,16 +1235,24 @@ trim() {
 
 prompt_password() {
     info "prompt password"
+    warn false "Leave blank to use a random password."
+    warn false "不填写则使用随机密码"
     while true; do
-        IFS= read -r -p "Password [$DEFAULT_PASSWORD]: " password
-        IFS= read -r -p "Retype password [$DEFAULT_PASSWORD]: " password_confirm
-        password=${password:-$DEFAULT_PASSWORD}
-        password_confirm=${password_confirm:-$DEFAULT_PASSWORD}
-        if [ -z "$password" ]; then
-            error "Passwords is empty. Try again."
-        elif [ "$password" != "$password_confirm" ]; then
-            error "Passwords don't match. Try again."
+        # 特殊字符列表
+        # https://learn.microsoft.com/previous-versions/windows/it-pro/windows-server-2012-r2-and-2012/hh994562(v=ws.11)
+        # 有的机器运行 centos 7 ，用 /dev/random 产生 16 位密码，开启了 rngd 也要 5 秒，关闭了 rngd 则长期阻塞
+        chars='A-Za-z0-9~!@#$%^&*_=+`|(){}[]:;"<>,.?/-'
+        random_password=$(tr -dc "$chars" </dev/urandom | head -c16)
+        IFS= read -r -p "Password: " password
+        if [ -n "$password" ]; then
+            IFS= read -r -p "Retype password: " password_confirm
+            if [ "$password" = "$password_confirm" ]; then
+                break
+            else
+                error "Passwords don't match. Try again."
+            fi
         else
+            password=$random_password
             break
         fi
     done
@@ -2264,6 +2292,11 @@ if ! opts=$(getopt -n $0 -o "h" --long "$long_opts" -- "$@"); then
     exit
 fi
 
+# /tmp 挂载在内存的话，可能不够空间
+# 处理 --frpc--toml 时会下载文件，因此在处理参数前就创建临时目录
+tmp=/reinstall-tmp
+mkdir_clear "$tmp"
+
 eval set -- "$opts"
 # shellcheck disable=SC2034
 while true; do
@@ -2308,15 +2341,21 @@ while true; do
     --frpc-conf | --frpc-config | --frpc-toml)
         [ -n "$2" ] || error_and_exit "Need value for $1"
 
-        frpc_config=$(get_unix_path "$2")
-
-        # alpine busybox 不支持 readlink -m
-        # readlink -m /asfsafasfsaf/fasf
-        # 因此需要先判断路径是否存在
-
-        if ! [ -f "$frpc_config" ]; then
-            error_and_exit "Not a toml file: $2"
-        fi
+        case "$(to_lower <<<"$2")" in
+        http://* | https://*)
+            frpc_config_url=$2
+            frpc_config=$tmp/frpc_config
+            if ! curl -L "$frpc_config_url" -o "$frpc_config"; then
+                error_and_exit "Can't get frpc config from $frpc_config_url"
+            fi
+            ;;
+        *)
+            # windows 路径转换
+            if ! { frpc_config=$(get_unix_path "$2") && [ -f "$frpc_config" ]; }; then
+                error_and_exit "File not exists: $2"
+            fi
+            ;;
+        esac
 
         # 转为绝对路径
         frpc_config=$(readlink -f "$frpc_config")
@@ -2443,13 +2482,7 @@ Password of the image will NOT modify.
     prompt_password
 fi
 
-# 必备组件
-install_pkg curl grep
-
-# /tmp 挂载在内存的话，可能不够空间
-tmp=/reinstall-tmp
-mkdir_clear "$tmp"
-
+# 必备组件\ninstall_pkg curl grep\n
 # Debian 不强制 --ci 参数，保留用户选择
 
 # 检查硬件架构
