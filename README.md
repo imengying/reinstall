@@ -47,6 +47,7 @@ bash reinstall.sh debian --ssh-port 2222
 
 # 指定固定密码 (不推荐，建议使用默认随机密码)
 bash reinstall.sh debian --password "MySecurePassword123!"
+
 # 导入 SSH 公钥 (直接提供)
 bash reinstall.sh debian --ssh-key "ssh-ed25519 AAAA..."
 ```
