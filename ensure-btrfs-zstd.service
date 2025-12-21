@@ -1,0 +1,11 @@
+[Unit]
+Description=Ensure btrfs zstd compression for root
+After=local-fs.target
+ConditionPathExists=/usr/local/sbin/ensure-btrfs-zstd.sh
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ensure-btrfs-zstd.sh
+
+[Install]
+WantedBy=multi-user.target

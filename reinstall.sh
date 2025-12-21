@@ -1896,6 +1896,8 @@ EOF
     # 下载 fix-eth-name 脚本
     curl -LO "$confhome/fix-eth-name.sh"
     curl -LO "$confhome/fix-eth-name.service"
+    curl -LO "$confhome/ensure-btrfs-zstd.sh"
+    curl -LO "$confhome/ensure-btrfs-zstd.service"
 
     # 有段时间 kali initrd 删除了原版 wget
     # 但 initrd 的 busybox wget 又不支持 https
