@@ -98,13 +98,6 @@ error_and_exit() {
     exit 1
 }
 
-show_dd_password_tips() {
-    warn false "
-这个密码仅用于安装过程中通过 SSH 查看日志。
-镜像本身的密码不会被修改。
-"
-}
-
 curl() {
     is_have_cmd curl || install_pkg curl
 
@@ -160,14 +153,6 @@ is_use_cloud_image() {
     [ -n "$cloud_image" ] && [ "$cloud_image" = 1 ]
 }
 
-is_force_use_installer() {
-    [ -n "$installer" ] && [ "$installer" = 1 ]
-}
-
-is_use_dd() {
-    [ "$distro" = dd ]
-}
-
 is_boot_in_separate_partition() {
     mount | grep -q ' on /boot type '
 }
@@ -213,18 +198,6 @@ is_host_has_ipv4_and_ipv6() {
     res=$(dig +short $host A $host AAAA | grep -v '\.$')
     # 有.表示有ipv4地址，有:表示有ipv6地址
     grep -q \. <<<$res && grep -q : <<<$res
-}
-
-is_netboot_xyz() {
-    [ "$distro" = netboot.xyz ]
-}
-
-is_alpine_live() {
-    [ "$distro" = alpine ] && [ "$hold" = 1 ]
-}
-
-is_have_initrd() {
-    ! is_netboot_xyz
 }
 
 is_use_firmware() {
@@ -848,10 +821,6 @@ Continue?
     fi
 }
 
-is_distro_like_redhat() {
-    return 1
-}
-
 is_distro_like_debian() {
     return 0
 }
@@ -1188,7 +1157,7 @@ is_secure_boot_enabled() {
 }
 
 is_need_grub_extlinux() {
-    ! { is_netboot_xyz && is_efi; }
+    return 0
 }
 
 # 只有 linux bios 是用本机的 grub/extlinux
@@ -1630,9 +1599,9 @@ build_extra_cmdline() {
     # 会将 extra.xxx=yyy 写入新系统的 /etc/modprobe.d/local.conf
     # https://answers.launchpad.net/ubuntu/+question/249456
     # https://salsa.debian.org/installer-team/rootskel/-/blob/master/src/lib/debian-installer-startup.d/S02module-params?ref_type=heads
-    for key in confhome hold force_cn cloud_image main_disk \
+    for key in confhome force_cn cloud_image main_disk \
         elts deb_mirror \
-        ssh_port web_port allow_ping; do
+        ssh_port web_port; do
         value=${!key}
         if [ -n "$value" ]; then
             is_need_quote "$value" &&
@@ -1669,7 +1638,6 @@ get_entry_name() {
     printf 'reinstall ('
     printf '%s' "$distro"
     [ -n "$releasever" ] && printf ' %s' "$releasever"
-    [ "$distro" = alpine ] && [ "$hold" = 1 ] && printf ' Live OS'
     printf ')'
 }
 
@@ -1677,7 +1645,7 @@ get_entry_name() {
 build_nextos_cmdline() {
     if [ $nextos_distro = alpine ]; then
         nextos_cmdline="alpine_repo=$nextos_repo modloop=$nextos_modloop"
-    elif is_distro_like_debian $nextos_distro; then
+    else
         nextos_cmdline="lowmem/low=1 auto=true priority=critical"
         nextos_cmdline+=" url=$nextos_ks"
         nextos_cmdline+=" mirror/http/hostname=${nextos_udeb_mirror%/*}"
@@ -1687,17 +1655,9 @@ build_nextos_cmdline() {
         if [ "$nextos_distro" = debian ] && is_debian_elts; then
             nextos_cmdline+=" apt-setup/services-select="
         fi
-        # kali 安装好后网卡是 eth0 这种格式，但安装时不是
-        if [ "$nextos_distro" = kali ]; then
-            nextos_cmdline+=" net.ifnames=0"
-            nextos_cmdline+=" simple-cdd/profiles=kali"
-        fi
-    elif is_distro_like_redhat $nextos_distro; then
-        # redhat
-        nextos_cmdline="root=live:$nextos_squashfs inst.ks=$nextos_ks"
     fi
 
-    if is_distro_like_debian $nextos_distro; then
+    if [ "$nextos_distro" = debian ]; then
         if [ "$basearch" = "x86_64" ]; then
             # debian installer 好像第一个 tty 是主 tty
             # 设置ttyS0,tty0,安装界面还是显示在ttyS0
@@ -2178,7 +2138,7 @@ This script is outdated, please download reinstall.sh again.
 
     # alpine live 不精简 initrd
     # 因为不知道用户想干什么，可能会用到精简的文件
-    if is_virt && ! is_alpine_live; then
+    if is_virt; then
         remove_useless_initrd_files
     fi
 
@@ -2276,8 +2236,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 long_opts=
-for o in ci installer debug minimal allow-ping force-cn help \
-    hold: sleep: \
+for o in ci debug force-cn help \
     passwd: password: \
     ssh-port: \
     ssh-key: public-key: \
@@ -2310,33 +2269,12 @@ while true; do
         ;;
     --ci)
         cloud_image=1
-        unset installer
-        shift
-        ;;
-    --installer)
-        installer=1
-        unset cloud_image
-        shift
-        ;;
-    --minimal)
-        minimal=1
-        shift
-        ;;
-    --allow-ping)
-        allow_ping=1
         shift
         ;;
     --force-cn)
         # 仅为了方便测试
         force_cn=1
         shift
-        ;;
-    --hold | --sleep)
-        if ! { [ "$2" = 1 ] || [ "$2" = 2 ]; }; then
-            error_and_exit "Invalid $1 value: $2"
-        fi
-        hold=$2
-        shift 2
         ;;
     --frpc-conf | --frpc-config | --frpc-toml)
         [ -n "$2" ] || error_and_exit "Need value for $1"
@@ -2469,16 +2407,7 @@ if is_secure_boot_enabled; then
 fi
 
 # 密码
-if ! is_netboot_xyz && [ -z "$ssh_keys" ] && [ -z "$password" ]; then
-    if is_use_dd; then
-        echo "
-This password is only used for SSH access to view logs during the installation.
-Password of the image will NOT modify.
-
-密码仅用于安装过程中通过 SSH 查看日志。
-镜像的密码不会被修改。
-"
-    fi
+if [ -z "$ssh_keys" ] && [ -z "$password" ]; then
     prompt_password
 fi
 
@@ -2506,22 +2435,10 @@ esac
 # 会用到 wmic，因此要在设置国内 confhome 后使用
 check_ram
 
-# 以下目标系统不需要两步安装
-# alpine
-# debian
-# el7 x86_64 >=1g
-# el7 aarch64 >=1.5g
-# el8/9/fedora 任何架构 >=2g
-if is_netboot_xyz ||
-    { ! is_use_cloud_image && {
-        [ "$distro" = "alpine" ] || is_distro_like_debian ||
-            { is_distro_like_redhat && [ $releasever -eq 7 ] && [ $ram_size -ge 1024 ] && [ $basearch = "x86_64" ]; } ||
-            { is_distro_like_redhat && [ $releasever -eq 7 ] && [ $ram_size -ge 1536 ] && [ $basearch = "aarch64" ]; } ||
-            { is_distro_like_redhat && [ $releasever -ge 8 ] && [ $ram_size -ge 2048 ]; }
-    }; }; then
+# Debian cloud image uses Alpine as intermediate, otherwise use Debian installer.
+if ! is_use_cloud_image; then
     setos nextos $distro $releasever
 else
-    # alpine 作为中间系统时，使用最新版
     alpine_ver_for_trans=$(get_latest_distro_releasever alpine)
     setos finalos $distro $releasever
     setos nextos alpine $alpine_ver_for_trans
@@ -2547,23 +2464,12 @@ if [ -f /etc/default/kexec ]; then
     sed -i 's/LOAD_KEXEC=true/LOAD_KEXEC=false/' /etc/default/kexec
 fi
 
-# 下载 netboot.xyz / 内核
-# shellcheck disable=SC2154
-if is_netboot_xyz; then
-    if is_efi; then
-        curl -Lo /netboot.xyz.efi $nextos_efi
-        add_efi_entry_in_linux /netboot.xyz.efi
-    else
-        curl -Lo /reinstall-vmlinuz $nextos_vmlinuz
-    fi
-else
-    # 下载 nextos 内核
-    info download vmlnuz and initrd
-    curl -Lo /reinstall-vmlinuz $nextos_vmlinuz
-    curl -Lo /reinstall-initrd $nextos_initrd
-    if is_use_firmware; then
-        curl -Lo /reinstall-firmware $nextos_firmware
-    fi
+# 下载 nextos 内核
+info download vmlnuz and initrd
+curl -Lo /reinstall-vmlinuz $nextos_vmlinuz
+curl -Lo /reinstall-initrd $nextos_initrd
+if is_use_firmware; then
+    curl -Lo /reinstall-firmware $nextos_firmware
 fi
 
 # 修改 alpine debian kali initrd
@@ -2688,24 +2594,17 @@ if is_need_grub_extlinux; then
         linux_cmd=LINUX
         initrd_cmd=INITRD
     else
-        if is_netboot_xyz; then
-            linux_cmd=linux16
-            initrd_cmd=initrd16
-        else
-            linux_cmd="linux$efi"
-            initrd_cmd="initrd$efi"
-        fi
+        linux_cmd="linux$efi"
+        initrd_cmd="initrd$efi"
     fi
 
     # 设置 cmdlind initrds
-    if ! is_netboot_xyz; then
-        find_main_disk
-        build_cmdline
+    find_main_disk
+    build_cmdline
 
-        initrds="$initrd"
-        if is_use_firmware; then
-            initrds+=" $firmware"
-        fi
+    initrds="$initrd"
+    if is_use_firmware; then
+        initrds+=" $firmware"
     fi
 
     if is_use_local_extlinux; then
@@ -2732,7 +2631,7 @@ EOF
         # 复制文件到 extlinux 工作目录
         if is_boot_in_separate_partition; then
             info "copying files to $extlinux_dir"
-            is_have_initrd && cp -f /reinstall-initrd $extlinux_dir
+            cp -f /reinstall-initrd $extlinux_dir
             is_use_firmware && cp -f /reinstall-firmware $extlinux_dir
             # 放最后，防止前两条返回非 0 而报错
             cp -f /reinstall-vmlinuz $extlinux_dir
@@ -2811,8 +2710,4 @@ else
     echo "Password: $password"
 fi
 
-if is_use_dd; then
-    echo 'Reboot to start DD.'
-else
-    echo "Reboot to start the installation."
-fi
+echo "Reboot to start the installation."
