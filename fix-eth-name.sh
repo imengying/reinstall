@@ -54,36 +54,16 @@ get_ethx_by_mac() {
 _get_ethx_by_mac() {
     mac=$(echo "$1" | to_lower)
 
-    flag=$2
-    if [ -z "$flag" ]; then
-        flag=master
-    fi
+    flag=${2:-master}
 
-    if true; then
-        if [ "$flag" = master ]; then
-            # master
-            # 过滤 azure vf (带 master ethx)
-            ip -o link | grep -i "$mac" | grep -v master | awk '{print $2}' | cut -d: -f1 | grep .
-        else
-            # slave
-            # 带 master ethx
-            ip -o link | grep -i "$mac" | grep -w master | awk '{print $2}' | cut -d: -f1 | grep .
-        fi
+    if [ "$flag" = master ]; then
+        # master
+        # 过滤 azure vf (带 master ethx)
+        ip -o link | grep -i "$mac" | grep -v master | awk '{print $2}' | cut -d: -f1 | grep .
     else
-        for i in $(cd /sys/class/net && echo *); do
-            if [ "$(cat "/sys/class/net/$i/address")" = "$mac" ]; then
-                if [ $(($(cat "/sys/class/net/$i/flags") & 0x800)) -ne 0 ]; then
-                    fact_flag=slave
-                else
-                    fact_flag=master
-                fi
-                if [ "$flag" = "$fact_flag" ]; then
-                    echo "$i"
-                    return
-                fi
-            fi
-        done
-        return 1
+        # slave
+        # 带 master ethx
+        ip -o link | grep -i "$mac" | grep -w master | awk '{print $2}' | cut -d: -f1 | grep .
     fi
 }
 

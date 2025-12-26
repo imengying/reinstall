@@ -41,43 +41,19 @@ get_ethx() {
     # 过滤 azure vf (带 master ethx)
     # 2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP qlen 1000\    link/ether 60:45:bd:21:8a:51 brd ff:ff:ff:ff:ff:ff
     # 3: eth1: <BROADCAST,MULTICAST,UP,LOWER_UP800> mtu 1500 qdisc mq master eth0 state UP qlen 1000\    link/ether 60:45:bd:21:8a:51 brd ff:ff:ff
-    if false; then
-        ip -o link | grep -i "$mac_addr" | grep -v master | awk '{print $2}' | cut -d: -f1 | grep .
-    else
-        ip -o link | grep -i "$mac_addr" | grep -v master | cut -d' ' -f2 | cut -d: -f1 | grep .
-    fi
-}
-
-get_ipv4_gateway() {
-    # debian 11 initrd 没有 xargs awk
-    # debian 12 initrd 没有 xargs
-    ip -4 route show default dev "$ethx" | head -1 | cut -d ' ' -f3
-}
-
-get_ipv6_gateway() {
-    # debian 11 initrd 没有 xargs awk
-    # debian 12 initrd 没有 xargs
-    ip -6 route show default dev "$ethx" | head -1 | cut -d ' ' -f3
+    ip -o link | grep -i "$mac_addr" | grep -v master | cut -d' ' -f2 | cut -d: -f1 | grep .
 }
 
 get_first_ipv4_addr() {
     # debian 11 initrd 没有 xargs awk
     # debian 12 initrd 没有 xargs
-    if false; then
-        ip -4 -o addr show scope global dev "$ethx" | head -1 | awk '{print $4}'
-    else
-        ip -4 -o addr show scope global dev "$ethx" | head -1 | grep -o '[0-9\.]*/[0-9]*'
-    fi
+    ip -4 -o addr show scope global dev "$ethx" | head -1 | grep -o '[0-9\.]*/[0-9]*'
 }
 
 get_first_ipv4_gateway() {
     # debian 11 initrd 没有 xargs awk
     # debian 12 initrd 没有 xargs
-    if false; then
-        ip -4 route show default dev "$ethx" | head -1 | awk '{print $3}'
-    else
-        ip -4 route show default dev "$ethx" | head -1 | cut -d' ' -f3
-    fi
+    ip -4 route show default dev "$ethx" | head -1 | cut -d' ' -f3
 }
 
 remove_netmask() {
@@ -87,21 +63,13 @@ remove_netmask() {
 get_first_ipv6_addr() {
     # debian 11 initrd 没有 xargs awk
     # debian 12 initrd 没有 xargs
-    if false; then
-        ip -6 -o addr show scope global dev "$ethx" | head -1 | awk '{print $4}'
-    else
-        ip -6 -o addr show scope global dev "$ethx" | head -1 | grep -o '[0-9a-f\:]*/[0-9]*'
-    fi
+    ip -6 -o addr show scope global dev "$ethx" | head -1 | grep -o '[0-9a-f\:]*/[0-9]*'
 }
 
 get_first_ipv6_gateway() {
     # debian 11 initrd 没有 xargs awk
     # debian 12 initrd 没有 xargs
-    if false; then
-        ip -6 route show default dev "$ethx" | head -1 | awk '{print $3}'
-    else
-        ip -6 route show default dev "$ethx" | head -1 | cut -d' ' -f3
-    fi
+    ip -6 route show default dev "$ethx" | head -1 | cut -d' ' -f3
 }
 
 is_have_ipv4_addr() {
@@ -145,12 +113,8 @@ add_missing_ipv4_config() {
         if ! is_have_ipv4_gateway; then
             # 如果 dhcp 无法设置onlink网关，那么在这里设置
             # debian 9 ipv6 不能识别 onlink，但 ipv4 能识别 onlink
-            if true; then
-                ip -4 route add "$ipv4_gateway" dev "$ethx"
-                ip -4 route add default via "$ipv4_gateway" dev "$ethx"
-            else
-                ip -4 route add default via "$ipv4_gateway" dev "$ethx" onlink
-            fi
+            ip -4 route add "$ipv4_gateway" dev "$ethx"
+            ip -4 route add default via "$ipv4_gateway" dev "$ethx"
         fi
     fi
 }
@@ -164,12 +128,8 @@ add_missing_ipv6_config() {
         if ! is_have_ipv6_gateway; then
             # 如果 dhcp 无法设置onlink网关，那么在这里设置
             # debian 9 ipv6 不能识别 onlink
-            if true; then
-                ip -6 route add "$ipv6_gateway" dev "$ethx"
-                ip -6 route add default via "$ipv6_gateway" dev "$ethx"
-            else
-                ip -6 route add default via "$ipv6_gateway" dev "$ethx" onlink
-            fi
+            ip -6 route add "$ipv6_gateway" dev "$ethx"
+            ip -6 route add default via "$ipv6_gateway" dev "$ethx"
         fi
     fi
 }
@@ -360,16 +320,10 @@ else
             dhcpcd
 
         # --noipv4ll 禁止生成 169.254.x.x
-        if false; then
-            # 等待 DHCP 全过程
-            timeout $DHCP_TIMEOUT \
-                dhcpcd --persistent --noipv4ll --nobackground "$ethx"
-        else
-            # 等待 DNS
-            dhcpcd --persistent --noipv4ll "$ethx" # 获取到 IP 后立即切换到后台
-            sleep $DNS_FILE_TIMEOUT                # 需要等待写入 dns
-            dhcpcd -x "$ethx"                      # 终止
-        fi
+        # 等待 DNS
+        dhcpcd --persistent --noipv4ll "$ethx" # 获取到 IP 后立即切换到后台
+        sleep $DNS_FILE_TIMEOUT                # 需要等待写入 dns
+        dhcpcd -x "$ethx"                      # 终止
         # autoconf 和 accept_ra 会被 dhcpcd 自动关闭，因此需要重新打开
         # 如果没重新打开，重新运行 dhcpcd 命令依然可以正常生成 slaac 地址和路由
         sysctl -w "net.ipv6.conf.$ethx.autoconf=1"
