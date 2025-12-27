@@ -1515,7 +1515,8 @@ install_qcow_by_copy() {
             echo "UUID=$root_uuid / btrfs compress=zstd 0 0" >>/os/etc/fstab
         fi
 
-        chroot_apt_install /os btrfs-progs
+        chroot_apt_install /os btrfs-progs curl systemd-timesyncd
+        chroot /os systemctl enable systemd-timesyncd || true
         chroot /os update-initramfs -u
     fi
 

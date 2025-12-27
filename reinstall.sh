@@ -443,15 +443,8 @@ assert_not_in_container() {
 
 # 使用 | del_br ，但返回 del_br 之前返回值
 run_with_del_cr() {
-    if false; then
-        # ash 不支持 PIPESTATUS[n]
-        res=$("$@") && ret=0 || ret=$?
-        echo "$res" | del_cr
-        return $ret
-    else
-        "$@" | del_cr
-        return ${PIPESTATUS[0]}
-    fi
+    "$@" | del_cr
+    return ${PIPESTATUS[0]}
 }
 
 run_with_del_cr_template() {
@@ -779,11 +772,7 @@ Continue?
             # https://salsa.debian.org/cloud-team/debian-cloud-images/-/tree/master/config_space/bookworm/files/etc/default/grub.d
             # cloud 包括各种奇怪的优化，例如不显示 grub 菜单
             # 因此使用 nocloud
-            if false; then
-                is_virt && ci_type=genericcloud || ci_type=generic
-            else
-                ci_type=nocloud
-            fi
+            ci_type=nocloud
             eval ${step}_img=$cdimage_mirror/cloud/$codename/latest/debian-$releasever-$ci_type-$basearch_alt.qcow2
         else
             # 传统安装
@@ -1246,10 +1235,6 @@ save_password() {
     # 假如用户运行 alpine live 直接打包硬盘镜像，如果保存了明文密码，则会暴露明文密码，因为 netboot initrd 在里面
     # 通过 --password 传入密码，history 有记录，也会暴露明文密码
     # /reinstall.log 也会暴露明文密码（已处理）
-    if false; then
-        printf '%s' "$password" >>"$dir/password-plaintext"
-    fi
-
     # sha512
     # 以下系统均支持 sha512 密码，但是生成密码需要不同的工具
     # 兼容性     openssl   mkpasswd          busybox  python
@@ -1280,15 +1265,6 @@ save_password() {
         error_and_exit "Could not generate sha512 password."
     fi
     echo "$crypted" >"$dir/password-linux-sha512"
-
-    # yescrypt
-    # 旧系统不支持，先不管
-    if false; then
-        if mkpasswd -m help | grep -wq yescrypt; then
-            crypted=$(printf '%s' "$password" | mkpasswd -m yescrypt --stdin)
-            echo "$crypted" >"$dir/password-linux-yescrypt"
-        fi
-    fi
 
 }
 
@@ -1454,16 +1430,11 @@ add_efi_entry_in_linux() {
                 cp -f "$source" "$dist_dir/$basename"
             fi
 
-            if false; then
-                grub_probe="$(command -v grub-probe grub2-probe)"
-                dev_part="$("$grub_probe" -t device "$dist_dir")"
-            else
-                install_pkg findmnt
-                # arch findmnt 会得到
-                # systemd-1
-                # /dev/sda2
-                dev_part=$(findmnt -T "$dist_dir" -no SOURCE | grep '^/dev/')
-            fi
+            install_pkg findmnt
+            # arch findmnt 会得到
+            # systemd-1
+            # /dev/sda2
+            dev_part=$(findmnt -T "$dist_dir" -no SOURCE | grep '^/dev/')
 
             id=$(efibootmgr --create-only \
                 --disk "/dev/$(get_disk_by_part $dev_part)" \
@@ -1624,14 +1595,10 @@ build_extra_cmdline() {
 }
 
 echo_tmp_ttys() {
-    if false; then
-        curl -L $confhome/ttys.sh | sh -s "console="
-    else
-        case "$basearch" in
-        x86_64) echo "console=ttyS0,115200n8 console=tty0" ;;
-        aarch64) echo "console=ttyS0,115200n8 console=ttyAMA0,115200n8 console=tty0" ;;
-        esac
-    fi
+    case "$basearch" in
+    x86_64) echo "console=ttyS0,115200n8 console=tty0" ;;
+    aarch64) echo "console=ttyS0,115200n8 console=ttyAMA0,115200n8 console=tty0" ;;
+    esac
 }
 
 get_entry_name() {
@@ -1835,19 +1802,12 @@ EOF
         # 下载 udeb
         curl -Lo $tmp/tmp.udeb http://$nextos_udeb_mirror/"$(grep -F /${package}_ $udeb_list)"
 
-        if false; then
-            # 使用 dpkg
-            # cygwin 没有 dpkg
-            install_pkg dpkg
-            dpkg -x $tmp/tmp.udeb $extract_dir
-        else
-            # 使用 ar tar xz
-            # cygwin 需安装 binutils
-            # centos7 ar 不支持 --output
-            install_pkg ar tar xz
-            (cd $tmp && ar x $tmp/tmp.udeb)
-            tar xf $tmp/data.tar.xz -C $extract_dir
-        fi
+        # 使用 ar tar xz
+        # cygwin 需安装 binutils
+        # centos7 ar 不支持 --output
+        install_pkg ar tar xz
+        (cd $tmp && ar x $tmp/tmp.udeb)
+        tar xf $tmp/data.tar.xz -C $extract_dir
     }
 
     # 在 debian installer 中判断能否用云内核
@@ -2507,20 +2467,6 @@ if is_need_grub_extlinux; then
         else
             # extlinux
             extlinux_cfg=$(find_grub_extlinux_cfg /boot extlinux.conf LINUX)
-        fi
-    fi
-
-    # 判断用 linux 还是 linuxefi（主要是红帽系）
-    # 现在 efi 用下载的 grub，因此不需要判断 linux 或 linuxefi
-    if false && is_use_local_grub_extlinux; then
-        # 在x86 efi机器上，不同版本的 grub 可能用 linux 或 linuxefi 加载内核
-        # 通过检测原有的条目有没有 linuxefi 字样就知道当前 grub 用哪一种
-        # 也可以检测 /etc/grub.d/10_linux
-        if [ -d /boot/loader/entries/ ]; then
-            entries="/boot/loader/entries/"
-        fi
-        if grep -q -r -E '^[[:space:]]*linuxefi[[:space:]]' $grub_cfg $entries; then
-            efi=efi
         fi
     fi
 
