@@ -13,7 +13,6 @@ SCRIPT_VERSION=4BACD833-A585-23BA-6CBB-9AA4E08E0003
 export LC_ALL=C
 
 # 处理部分用户用 su 切换成 root 导致环境变量没 sbin 目录
-# 也能处理 cygwin bash 没有添加 -l 运行 reinstall.sh
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH
 
 # 如果不是 bash 的话，继续执行会有语法错误，因此在这里判断是否 bash
@@ -102,7 +101,6 @@ curl() {
     is_have_cmd curl || install_pkg curl
 
     # 添加 -f, --fail，不然 404 退出码也为0
-    # 32位 cygwin 已停止更新，证书可能有问题，先添加 --insecure
     # centos 7 curl 不支持 --retry-connrefused --retry-all-errors
     # 因此手动 retry
     grep -o 'http[^ ]*' <<<"$@" >&2
@@ -147,10 +145,6 @@ is_in_china() {
 }
 is_in_alpine() {
     [ -f /etc/alpine-release ]
-}
-
-is_use_cloud_image() {
-    [ -n "$cloud_image" ] && [ "$cloud_image" = 1 ]
 }
 
 is_boot_in_separate_partition() {
@@ -246,169 +240,6 @@ insert_into_file() {
     sed -i "${line_num}r /dev/stdin" "$file"
 }
 
-test_url() {
-    test_url_real false "$@"
-}
-
-test_url_grace() {
-    test_url_real true "$@"
-}
-
-test_url_real() {
-    grace=$1
-    url=$2
-    expect_types=$3
-    var_to_eval=$4
-    info test url
-
-    failed() {
-        $grace && return 1
-        error_and_exit "$@"
-    }
-
-    tmp_file=$tmp/img-test
-
-    # TODO: 好像无法识别 nixos 官方源的跳转
-    # 有的服务器不支持 range，curl会下载整个文件
-    # 所以用 head 限制 1M
-    # 过滤 curl 23 错误（head 限制了大小）
-    # 也可用 ulimit -f 但好像 cygwin 不支持
-    # ${PIPESTATUS[n]} 表示第n个管道的返回值
-    echo $url
-    for i in $(seq 5 -1 0); do
-        if command curl --insecure --connect-timeout 10 -Lfr 0-1048575 "$url" \
-            1> >(exec head -c 1048576 >$tmp_file) \
-            2> >(exec grep -v 'curl: (23)' >&2); then
-            break
-        else
-            ret=$?
-            msg="$url not accessible"
-            case $ret in
-            22)
-                # 403 404
-                # 这里的 failed 虽然返回 1，但是不会中断脚本，因此要手动 return
-                failed "$msg"
-                return "$ret"
-                ;;
-            23)
-                # 限制了空间
-                break
-                ;;
-            *)
-                # 其他错误
-                if [ $i -eq 0 ]; then
-                    failed "$msg"
-                    return "$ret"
-                fi
-                ;;
-            esac
-            sleep 1
-        fi
-    done
-
-    # 如果要检查文件类型
-    if [ -n "$expect_types" ]; then
-        install_pkg file
-        real_type=$(file_enhanced $tmp_file)
-        echo "File type: $real_type"
-
-        # debian 9 ubuntu 16.04-20.04 可能会将 iso 识别成 raw
-        for type in $expect_types $([ "$expect_types" = iso ] && echo raw); do
-            if [[ ."$real_type" = *."$type" ]]; then
-                # 如果要设置变量
-                if [ -n "$var_to_eval" ]; then
-                    IFS=. read -r "${var_to_eval?}" "${var_to_eval}_warp" <<<"$real_type"
-                fi
-                return
-            fi
-        done
-
-        failed "$url
-Expected type: $expect_types
-Actually type: $real_type"
-    fi
-}
-
-fix_file_type() {
-    # gzip的mime有很多种写法
-    # centos7中显示为 x-gzip，在其他系统中显示为 gzip，可能还有其他
-    # 所以不用mime判断
-    # https://www.digipres.org/formats/sources/tika/formats/#application/gzip
-
-    # centos 7 上的 file 显示 qcow2 的 mime 为 application/octet-stream
-    # file debian-12-genericcloud-amd64.qcow2
-    # debian-12-genericcloud-amd64.qcow2: QEMU QCOW Image (v3), 2147483648 bytes
-    # file --mime debian-12-genericcloud-amd64.qcow2
-    # debian-12-genericcloud-amd64.qcow2: application/octet-stream; charset=binary
-
-    # --extension 不靠谱
-    # file -b /reinstall-tmp/img-test --mime-type
-    # application/x-qemu-disk
-    # file -b /reinstall-tmp/img-test --extension
-    # ???
-
-    # 1. 删除,;#
-    # DOS/MBR boot sector; partition 1: ...
-    # gzip compressed data, was ...
-    # # ISO 9660 CD-ROM filesystem data... (有些 file 版本开头输出有井号)
-
-    # 2. 删除开头的空格
-
-    # 3. 删除无意义的单词 POSIX, Unicode, UTF-8, ASCII
-    # POSIX tar archive (GNU)
-    # Unicode text, UTF-8 text
-    # UTF-8 Unicode text, with very long lines
-    # ASCII text
-
-    # 4. 下面两种都是 raw
-    # DOS/MBR boot sector
-    # x86 boot sector; partition 1: ...
-    sed -E \
-        -e 's/[,;#]//g' \
-        -e 's/^[[:space:]]*//' \
-        -e 's/(POSIX|Unicode|UTF-8|ASCII)//gi' \
-        -e 's/DOS\/MBR boot sector/raw/i' \
-        -e 's/x86 boot sector/raw/i' \
-        -e 's/Zstandard/zstd/i' \
-        -e 's/Windows imaging \(WIM\) image/wim/i' |
-        awk '{print $1}' | to_lower
-}
-
-# 不用 file -z，因为
-# 1. file -z 只能看透一层
-# 2. alpine file -z 无法看透部分镜像（前1M），例如：
-# guajibao-win10-ent-ltsc-2021-x64-cn-efi.vhd.gz
-# guajibao-win7-sp1-ent-x64-cn-efi.vhd.gz
-# win7-ent-sp1-x64-cn-efi.vhd.gz
-# 还要注意 centos 7 没有 -Z 只有 -z
-file_enhanced() {
-    file=$1
-
-    full_type=
-    while true; do
-        type="$(file -b $file | fix_file_type)"
-        full_type="$type.$full_type"
-        case "$type" in
-        xz | gzip | zstd)
-            install_pkg "$type"
-            $type -dc <"$file" | head -c 1048576 >"$file.inside"
-            mv -f "$file.inside" "$file"
-            ;;
-        tar)
-            install_pkg "$type"
-            # 隐藏 gzip: unexpected end of file 提醒
-            tar xf "$file" -O 2>/dev/null | head -c 1048576 >"$file.inside"
-            mv -f "$file.inside" "$file"
-            ;;
-        *)
-            break
-            ;;
-        esac
-    done
-    # shellcheck disable=SC2001
-    echo "$full_type" | sed 's/\.$//'
-}
-
 add_community_repo_for_alpine() {
     local alpine_ver
 
@@ -439,94 +270,6 @@ assert_not_in_container() {
             _error_and_exit
         fi
     fi
-}
-
-# 使用 | del_br ，但返回 del_br 之前返回值
-run_with_del_cr() {
-    "$@" | del_cr
-    return ${PIPESTATUS[0]}
-}
-
-run_with_del_cr_template() {
-    if get_function _$exe >/dev/null; then
-        run_with_del_cr _$exe "$@"
-    else
-        run_with_del_cr command $exe "$@"
-    fi
-}
-
-wmic() {
-    if is_have_cmd wmic; then
-        # 如果参数没有 GET，添加 GET，防止以下报错
-        # wmic memorychip /format:list
-        # 此级别的开关异常。
-        has_get=false
-        for i in "$@"; do
-            # 如果参数有 GET
-            if [ "$(to_upper <<<"$i")" = GET ]; then
-                has_get=true
-                break
-            fi
-        done
-
-        # 输出为 /format:list 格式
-        if $has_get; then
-            command wmic "$@" /format:list
-        else
-            command wmic "$@" get /format:list
-        fi
-        return
-    fi
-
-    # powershell wmi 默认参数
-    local namespace='root\cimv2'
-    local class=
-    local filter=
-    local props=
-
-    # namespace
-    if [[ "$(to_upper <<<"$1")" = /NAMESPACE* ]]; then
-        # 删除引号，删除 \\
-        namespace=$(cut -d: -f2 <<<"$1" | sed -e "s/[\"']//g" -e 's/\\\\//g')
-        shift
-    fi
-
-    # class
-    if [[ "$(to_upper <<<"$1")" = PATH ]]; then
-        class=$2
-        shift 2
-    else
-        case "$(to_lower <<<"$1")" in
-        nicconfig) class=Win32_NetworkAdapterConfiguration ;;
-        memorychip) class=Win32_PhysicalMemory ;;
-        *) class=Win32_$1 ;;
-        esac
-        shift
-    fi
-
-    # filter
-    if [[ "$(to_upper <<<"$1")" = WHERE ]]; then
-        filter=$2
-        shift 2
-    fi
-
-    # props
-    if [[ "$(to_upper <<<"$1")" = GET ]]; then
-        props=$2
-        shift 2
-    fi
-
-    if ! [ -f "$tmp/wmic.ps1" ]; then
-        curl -Lo "$tmp/wmic.ps1" "$confhome/wmic.ps1"
-    fi
-
-    # shellcheck disable=SC2046
-    powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass \
-        -File "$(cygpath -w "$tmp/wmic.ps1")" \
-        -Namespace "$namespace" \
-        -Class "$class" \
-        $([ -n "$filter" ] && echo -Filter "$filter") \
-        $([ -n "$props" ] && echo -Properties "$props")
 }
 
 is_virt() {
@@ -571,7 +314,6 @@ is_cpu_supports_x86_64_v3() {
     # https://learn.microsoft.com/sysinternals/downloads/coreinfo
 
     # abm = popcnt + lzcnt
-    # /proc/cpuinfo 不显示 lzcnt, 可用 abm 代替，但 cygwin 也不显示 abm
     # /proc/cpuinfo 不显示 osxsave, 故用 xsave 代替
 
     need_flags="avx avx2 bmi1 bmi2 f16c fma movbe xsave"
@@ -711,7 +453,7 @@ setos() {
         15) codename=duke ;;
         esac
 
-        if ! is_use_cloud_image && is_debian_elts && is_in_china; then
+        if is_debian_elts && is_in_china; then
             warn "
 Due to the lack of Debian Freexian ELTS instaler mirrors in China, the installation time may be longer.
 Continue?
@@ -753,7 +495,7 @@ Continue?
             initrd_mirror=$mirror
         fi
 
-        # 云镜像和 firmware 下载源
+        # firmware 下载源
         if is_in_china; then
             cdimage_mirror=https://mirror.nju.edu.cn/debian-cdimage
         else
@@ -767,26 +509,17 @@ Continue?
         # 甲骨文 arm64 cloud 内核 vnc 没有显示
         [ "$basearch_alt" = arm64 ] && flavour=
 
-        if is_use_cloud_image; then
-            # cloud image
-            # https://salsa.debian.org/cloud-team/debian-cloud-images/-/tree/master/config_space/bookworm/files/etc/default/grub.d
-            # cloud 包括各种奇怪的优化，例如不显示 grub 菜单
-            # 因此使用 nocloud
-            ci_type=nocloud
-            eval ${step}_img=$cdimage_mirror/cloud/$codename/latest/debian-$releasever-$ci_type-$basearch_alt.qcow2
-        else
-            # 传统安装
-            initrd_dir=dists/$codename/main/installer-$basearch_alt/current/images/netboot/debian-installer/$basearch_alt
+        # 传统安装
+        initrd_dir=dists/$codename/main/installer-$basearch_alt/current/images/netboot/debian-installer/$basearch_alt
 
-            eval ${step}_udeb_mirror=$udeb_mirror
-            eval ${step}_vmlinuz=https://$initrd_mirror/$initrd_dir/linux
-            eval ${step}_initrd=https://$initrd_mirror/$initrd_dir/initrd.gz
-            eval ${step}_ks=$confhome/debian.cfg
-            eval ${step}_firmware=$cdimage_mirror/unofficial/non-free/firmware/$codename/current/firmware.cpio.gz
-            eval ${step}_codename=$codename
-        fi
+        eval ${step}_udeb_mirror=$udeb_mirror
+        eval ${step}_vmlinuz=https://$initrd_mirror/$initrd_dir/linux
+        eval ${step}_initrd=https://$initrd_mirror/$initrd_dir/initrd.gz
+        eval ${step}_ks=$confhome/debian.cfg
+        eval ${step}_firmware=$cdimage_mirror/unofficial/non-free/firmware/$codename/current/firmware.cpio.gz
+        eval ${step}_codename=$codename
 
-        # 官方安装和云镜像都会用到的
+        # 官方安装会用到的
         eval ${step}_deb_mirror=$deb_mirror
         eval ${step}_kernel=linux-image$flavour-$basearch_alt
     }
@@ -799,24 +532,10 @@ Continue?
     esac
 
     # debian <=256M 必须使用云内核，否则不够内存
-    if is_distro_like_debian && [ "$ram_size" -le 256 ]; then
+    if [ "$distro" = debian ] && [ "$ram_size" -le 256 ]; then
         exit_if_cant_use_cloud_kernel
     fi
 
-    # 集中测试云镜像格式
-    if is_use_cloud_image && [ "$step" = finalos ]; then
-        # shellcheck disable=SC2154
-        test_url $finalos_img 'qemu qemu.gzip qemu.xz qemu.zstd raw.xz' finalos_img_type
-    fi
-}
-
-is_distro_like_debian() {
-    return 0
-}
-
-get_latest_distro_releasever() {
-    get_function_content verify_os_name |
-        grep -wo "$1 [^'\"]*" | awk -F'|' '{print $NF}'
 }
 
 # 检查是否为正确的系统名
@@ -849,7 +568,6 @@ verify_os_args() {
 }
 
 get_cmd_path() {
-    # arch 云镜像不带 which
     # command -v 包括脚本里面的方法
     # ash 无效
     type -f -p $1
@@ -955,7 +673,6 @@ install_pkg() {
     # centos/alma/rocky/fedora   epel-release                                   epel
     # oracle linux               oracle-epel-release                            ol9_developer_EPEL
     # opencloudos                epol-release                                   EPOL
-    # alibaba cloud linux 3      epel-release/epel-aliyuncs-release(qcow2自带)  epel
     # anolis 23                  anolis-epao-release                            EPAO
 
     # anolis 8
@@ -963,7 +680,6 @@ install_pkg() {
     # ========================== Name Matched: *ep*-release ==========================
     # anolis-epao-release.noarch : EPAO Packages for Anolis OS 8 repository configuration
     # epel-aliyuncs-release.noarch : Extra Packages for Enterprise Linux repository configuration
-    # epel-release.noarch : Extra Packages for Enterprise Linux repository configuration (qcow2自带)
 
     check_is_need_epel() {
         is_need_epel() {
@@ -1071,8 +787,6 @@ is_valid_ram_size() {
 
 check_ram() {
     ram_standard=256
-    ram_cloud_image=256
-    has_cloud_image=true
 
     # lsmem最准确但 centos7 arm 和 alpine 不能用，debian 9 util-linux 没有 lsmem
     # arm 24g dmidecode 显示少了128m
@@ -1095,7 +809,6 @@ check_ram() {
     fi
 
     # 用于兜底，不太准确
-    # cygwin 要装 procps-ng 才有 free 命令
     if ! is_valid_ram_size "$ram_size"; then
         ram_size_k=$(grep '^MemTotal:' /proc/meminfo | awk '{print $2}')
         ram_size=$((ram_size_k / 1024 + 64 + 4))
@@ -1105,19 +818,8 @@ check_ram() {
         error_and_exit "Could not detect RAM size."
     fi
 
-    # ram 足够就用普通方法安装，否则如果内存大于512就用 cloud image
-    # TODO: 测试 256 384 内存
-    if ! is_use_cloud_image && [ $ram_size -lt $ram_standard ]; then
-        if $has_cloud_image; then
-            info "RAM < $ram_standard MB. Fallback to cloud image mode"
-            cloud_image=1
-        else
-            error_and_exit "Could not install $distro: RAM < $ram_standard MB."
-        fi
-    fi
-
-    if is_use_cloud_image && [ $ram_size -lt $ram_cloud_image ]; then
-        error_and_exit "Could not install $distro using cloud image: RAM < $ram_cloud_image MB."
+    if [ $ram_size -lt $ram_standard ]; then
+        error_and_exit "Could not install $distro: RAM < $ram_standard MB."
     fi
 }
 
@@ -1176,12 +878,6 @@ to_lower() {
     tr '[:upper:]' '[:lower:]'
 }
 
-del_cr() {
-    # wmic/reg 换行符是 \r\r\n
-    # wmic nicconfig where InterfaceIndex=$id get MACAddress,IPAddress,IPSubnet,DefaultIPGateway | hexdump -c
-    sed -E 's/\r+$//'
-}
-
 del_empty_lines() {
     sed '/^[[:space:]]*$/d'
 }
@@ -1197,7 +893,6 @@ prompt_password() {
     warn false "不填写则使用随机密码"
     while true; do
         # 特殊字符列表
-        # https://learn.microsoft.com/previous-versions/windows/it-pro/windows-server-2012-r2-and-2012/hh994562(v=ws.11)
         # 有的机器运行 centos 7 ，用 /dev/random 产生 16 位密码，开启了 rngd 也要 5 秒，关闭了 rngd 则长期阻塞
         chars='A-Za-z0-9~!@#$%^&*_=+`|(){}[]:;"<>,.?/-'
         random_password=$(tr -dc "$chars" </dev/urandom | head -c16)
@@ -1243,7 +938,6 @@ save_password() {
     # debian 9     ×         √
     # ubuntu 16    ×         √
     # alpine       √      可能系统装了expect     √
-    # cygwin       √
     # others       √
 
     # alpine
@@ -1374,8 +1068,6 @@ collect_netconf() {
 }
 
 get_maybe_efi_dirs_in_linux() {
-    # arch云镜像efi分区挂载在/efi，且使用 autofs，挂载后会有两个 /efi 条目
-    # openEuler 云镜像 boot 分区是 vfat 格式，但 vfat 可以当 efi 分区用
     # TODO: 最好通过 lsblk/blkid 检查是否为 efi 分区类型
     mount | awk '$5=="vfat" || $5=="autofs" {print $3}' | grep -E '/boot|/efi' | sort -u
 }
@@ -1471,22 +1163,24 @@ install_grub_linux_efi() {
 
     # fcix 经常 404
     # https://mirror.fcix.net/opensuse/tumbleweed/repo/oss/EFI/BOOT/bootx64.efi
-    # https://mirror.fcix.net/opensuse/tumbleweed/appliances/openSUSE-Tumbleweed-Minimal-VM.x86_64-Cloud.qcow2
-
     # dl.fedoraproject.org 不支持 ipv6
 
     if [ "$efi_distro" = fedora ]; then
-        # 使用固定的 Fedora 版本，因为本脚本只支持 Debian
-        # get_latest_distro_releasever 无法解析 Fedora 版本
-        fedora_ver=41
-
         if is_in_china; then
             mirror=https://mirror.nju.edu.cn/fedora
         else
             mirror=https://d2lzkl7pfhq30w.cloudfront.net/pub/fedora/linux
         fi
 
-        curl -Lo $tmp/$grub_efi $mirror/releases/$fedora_ver/Everything/$basearch/os/EFI/BOOT/$grub_efi
+        # 新版本可能未同步或已归档，按顺序回退
+        for fedora_ver in 41 40 39 38; do
+            if curl -Lo "$tmp/$grub_efi" "$mirror/releases/$fedora_ver/Everything/$basearch/os/EFI/BOOT/$grub_efi"; then
+                break
+            fi
+            rm -f "$tmp/$grub_efi"
+        done
+
+        [ -s "$tmp/$grub_efi" ] || error_and_exit "Failed to download grub efi from Fedora mirrors."
     else
         if is_in_china; then
             mirror=https://mirror.nju.edu.cn/opensuse
@@ -1549,28 +1243,13 @@ is_need_quote() {
     [[ "$1" = *' '* ]] || [[ "$1" = *'&'* ]] || [[ "$1" = http* ]]
 }
 
-# 转换 finalos_a=1 为 finalos.a=1 ，排除 finalos_mirrorlist
-build_finalos_cmdline() {
-    if vars=$(compgen -v finalos_); then
-        for key in $vars; do
-            value=${!key}
-            key=${key#finalos_}
-            if [ -n "$value" ] && [ $key != "mirrorlist" ]; then
-                is_need_quote "$value" &&
-                    finalos_cmdline+=" finalos_$key='$value'" ||
-                    finalos_cmdline+=" finalos_$key=$value"
-            fi
-        done
-    fi
-}
-
 build_extra_cmdline() {
     # 使用 extra_xxx=yyy 而不是 extra.xxx=yyy
     # 因为 debian installer /lib/debian-installer-startup.d/S02module-params
     # 会将 extra.xxx=yyy 写入新系统的 /etc/modprobe.d/local.conf
     # https://answers.launchpad.net/ubuntu/+question/249456
     # https://salsa.debian.org/installer-team/rootskel/-/blob/master/src/lib/debian-installer-startup.d/S02module-params?ref_type=heads
-    for key in confhome force_cn cloud_image main_disk \
+    for key in confhome force_cn main_disk \
         elts deb_mirror \
         ssh_port web_port; do
         value=${!key}
@@ -1581,16 +1260,9 @@ build_extra_cmdline() {
         fi
     done
 
-    # 指定最终安装系统的 mirrorlist，链接有&，在grub中是特殊字符，所以要加引号
-    if [ -n "$finalos_mirrorlist" ]; then
-        extra_cmdline+=" extra_mirrorlist='$finalos_mirrorlist'"
-    elif [ -n "$nextos_mirrorlist" ]; then
-        extra_cmdline+=" extra_mirrorlist='$nextos_mirrorlist'"
-    fi
-
     # cloudcone 特殊处理
     if is_grub_dir_linked; then
-        finalos_cmdline+=" extra_link_grub_dir=1"
+        extra_cmdline+=" extra_link_grub_dir=1"
     fi
 }
 
@@ -1645,19 +1317,10 @@ build_cmdline() {
     # nextos
     build_nextos_cmdline
 
-    # finalos
-    # trans 需要 finalos_distro 识别是安装 alpine 还是其他系统
-    if [ "$distro" = alpine ]; then
-        finalos_distro=alpine
-    fi
-    if [ -n "$finalos_distro" ]; then
-        build_finalos_cmdline
-    fi
-
     # extra
     build_extra_cmdline
 
-    cmdline="$nextos_cmdline $finalos_cmdline $extra_cmdline"
+    cmdline="$nextos_cmdline $extra_cmdline"
 }
 
 # 脚本可能多次运行，先清理之前的残留
@@ -1675,7 +1338,7 @@ mkdir_clear() {
     mkdir -p $dir
 }
 
-mod_initrd_debian_kali() {
+mod_initrd_debian() {
     # hack 1
     # 允许设置 ipv4 onlink 网关
     sed -Ei 's,&&( onlink=),||\1,' etc/udhcpc/default.script
@@ -1803,7 +1466,6 @@ EOF
         curl -Lo $tmp/tmp.udeb http://$nextos_udeb_mirror/"$(grep -F /${package}_ $udeb_list)"
 
         # 使用 ar tar xz
-        # cygwin 需安装 binutils
         # centos7 ar 不支持 --output
         install_pkg ar tar xz
         (cd $tmp && ar x $tmp/tmp.udeb)
@@ -1817,9 +1479,6 @@ EOF
     curl -LO "$confhome/fix-eth-name.sh"
     curl -LO "$confhome/fix-eth-name.service"
 
-    # 有段时间 kali initrd 删除了原版 wget
-    # 但 initrd 的 busybox wget 又不支持 https
-    # 因此改成在这里下载
     curl -LO "$confhome/get-xda.sh"
     curl -LO "$confhome/ttys.sh"
     if [ -n "$frpc_config" ]; then
@@ -1830,19 +1489,6 @@ EOF
     # 可以节省一点内存？
     echo 'export DEBCONF_DROP_TRANSLATIONS=1' |
         insert_into_file lib/debian-installer/menu before 'exec debconf'
-
-    # 还原 kali netinst.iso 的 simple-cdd 机制
-    # 主要用于调用 kali.postinst 设置 zsh 为默认 shell
-    # 但 mini.iso 又没有这种机制
-    # https://gitlab.com/kalilinux/build-scripts/kali-live/-/raw/main/kali-config/common/includes.installer/kali-finish-install?ref_type=heads
-    # https://salsa.debian.org/debian/simple-cdd/-/blob/master/debian/14simple-cdd?ref_type=heads
-    # https://http.kali.org/pool/main/s/simple-cdd/simple-cdd-profiles_0.6.9_all.udeb
-    if [ "$distro" = kali ]; then
-        # 但我们没有使用 iso，因此没有 kali.postinst，需要另外下载
-        mkdir -p cdrom/simple-cdd
-        curl -Lo cdrom/simple-cdd/kali.postinst https://gitlab.com/kalilinux/build-scripts/kali-live/-/raw/main/kali-config/common/includes.installer/kali-finish-install?ref_type=heads
-        chmod a+x cdrom/simple-cdd/kali.postinst
-    fi
 
     if [ "$distro" = debian ] && is_debian_elts; then
         curl -Lo usr/share/keyrings/debian-archive-keyring.gpg https://deb.freexian.com/extended-lts/archive-key.gpg
@@ -1892,9 +1538,7 @@ EOF
             (
                 cd $udeb_drivers_dir
                 for driver in $extra_drivers; do
-                    # debian 模块没有压缩
-                    # kali 模块有压缩
-                    # 因此要有 *
+                    # 模块可能有压缩，因此要有 *
                     if ! find $dist_drivers_dir -name "$driver.ko*" | grep -q .; then
                         echo "adding driver: $driver"
                         file=$(find . -name "$driver.ko*" | grep .)
@@ -2064,7 +1708,6 @@ mod_initrd() {
     mkdir_clear $initrd_dir
     cd $initrd_dir
 
-    # cygwin 下处理 debian initrd 时
     # shellcheck disable=SC2046
     # nonmatching 是精确匹配路径
     zcat /reinstall-initrd | cpio -idm
@@ -2090,10 +1733,8 @@ This script is outdated, please download reinstall.sh again.
         cat "$frpc_config" >$initrd_dir/configs/frpc.toml
     fi
 
-    if is_distro_like_debian $nextos_distro; then
-        mod_initrd_debian_kali
-    else
-        mod_initrd_$nextos_distro
+    if [ "$nextos_distro" = debian ]; then
+        mod_initrd_debian
     fi
 
     # alpine live 不精简 initrd
@@ -2196,7 +1837,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 long_opts=
-for o in ci debug force-cn help \
+for o in debug force-cn help \
     passwd: password: \
     ssh-port: \
     ssh-key: public-key: \
@@ -2227,10 +1868,6 @@ while true; do
         set -x
         shift
         ;;
-    --ci)
-        cloud_image=1
-        shift
-        ;;
     --force-cn)
         # 仅为了方便测试
         force_cn=1
@@ -2248,7 +1885,6 @@ while true; do
             fi
             ;;
         *)
-            # windows 路径转换
             if ! { frpc_config=$(get_unix_path "$2") && [ -f "$frpc_config" ]; }; then
                 error_and_exit "File not exists: $2"
             fi
@@ -2372,7 +2008,6 @@ if [ -z "$ssh_keys" ] && [ -z "$password" ]; then
 fi
 
 # 必备组件\ninstall_pkg curl grep\n
-# Debian 不强制 --ci 参数，保留用户选择
 
 # 检查硬件架构
 basearch=$(uname -m)
@@ -2392,17 +2027,10 @@ esac
 # 所有资源直接从 GitHub 获取
 
 # 检查内存
-# 会用到 wmic，因此要在设置国内 confhome 后使用
 check_ram
 
-# Debian cloud image uses Alpine as intermediate, otherwise use Debian installer.
-if ! is_use_cloud_image; then
-    setos nextos $distro $releasever
-else
-    alpine_ver_for_trans=$(get_latest_distro_releasever alpine)
-    setos finalos $distro $releasever
-    setos nextos alpine $alpine_ver_for_trans
-fi
+# 仅支持 Debian 安装器路径
+setos nextos $distro $releasever
 
 # 删除之前的条目
 # 防止第一次运行 netboot.xyz，第二次运行其他，但还是进入 netboot.xyz
@@ -2432,8 +2060,8 @@ if is_use_firmware; then
     curl -Lo /reinstall-firmware $nextos_firmware
 fi
 
-# 修改 alpine debian kali initrd
-if [ "$nextos_distro" = alpine ] || is_distro_like_debian "$nextos_distro"; then
+# 修改 debian initrd
+if [ "$nextos_distro" = debian ]; then
     mod_initrd
 fi
 
@@ -2625,7 +2253,6 @@ EOF
 
         get_function_content load_grubenv_if_not_loaded >$target_cfg
 
-        # 原系统为 openeuler 云镜像，需要添加 --unrestricted，否则要输入密码
         del_empty_lines <<EOF | tee -a $target_cfg
 set timeout_style=menu
 set timeout=5
