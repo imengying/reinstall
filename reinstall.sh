@@ -1152,46 +1152,61 @@ get_grub_efi_filename() {
 install_grub_linux_efi() {
     info 'download grub efi'
 
-    # fedora 39 的 efi 无法识别 opensuse tumbleweed 的 xfs
-    efi_distro=fedora
     grub_efi=$(get_grub_efi_filename)
 
-    # 不要用 download.opensuse.org 和 download.fedoraproject.org
-    # 因为 ipv6 访问有时跳转到 ipv4 地址，造成 ipv6 only 机器无法下载
-    # 日韩机器有时得到国内镜像源，但镜像源屏蔽了国外 IP 导致连不上
-    # https://mirrors.bfsu.edu.cn/opensuse/ports/aarch64/tumbleweed/repo/oss/EFI/BOOT/grub.efi
+    mirror="https://${nextos_deb_mirror:-deb.debian.org/debian}"
+    codename=${nextos_codename:-bookworm}
 
-    # fcix 经常 404
-    # https://mirror.fcix.net/opensuse/tumbleweed/repo/oss/EFI/BOOT/bootx64.efi
-    # dl.fedoraproject.org 不支持 ipv6
+    case "$basearch_alt" in
+    amd64)
+        grub_pkg=grub-efi-amd64-bin
+        ;;
+    arm64)
+        grub_pkg=grub-efi-arm64-bin
+        ;;
+    esac
 
-    if [ "$efi_distro" = fedora ]; then
-        if is_in_china; then
-            mirror=https://mirror.nju.edu.cn/fedora
-        else
-            mirror=https://d2lzkl7pfhq30w.cloudfront.net/pub/fedora/linux
-        fi
+    install_pkg ar tar gzip xz
 
-        # 新版本可能未同步或已归档，按顺序回退
-        for fedora_ver in 41 40 39 38; do
-            if curl -Lo "$tmp/$grub_efi" "$mirror/releases/$fedora_ver/Everything/$basearch/os/EFI/BOOT/$grub_efi"; then
-                break
-            fi
-            rm -f "$tmp/$grub_efi"
-        done
+    pkg_list=$tmp/grub-packages
+    curl -L "$mirror/dists/$codename/main/binary-$basearch_alt/Packages.gz" | gzip -dc >"$pkg_list"
 
-        [ -s "$tmp/$grub_efi" ] || error_and_exit "Failed to download grub efi from Fedora mirrors."
-    else
-        if is_in_china; then
-            mirror=https://mirror.nju.edu.cn/opensuse
-        else
-            mirror=https://downloadcontentcdn.opensuse.org
-        fi
+    deb_path=$(
+        awk -v pkg="$grub_pkg" '
+            $1=="Package:" {p=$2}
+            $1=="Filename:" && p==pkg {print $2; exit}
+        ' "$pkg_list"
+    )
 
-        [ "$basearch" = x86_64 ] && ports='' || ports=/ports/$basearch
+    [ -n "$deb_path" ] || error_and_exit "Cannot find $grub_pkg in $codename packages."
 
-        curl -Lo $tmp/$grub_efi $mirror$ports/tumbleweed/repo/oss/EFI/BOOT/grub.efi
+    deb_file=$tmp/grub-efi.deb
+    curl -Lo "$deb_file" "$mirror/$deb_path"
+
+    extract_dir=$tmp/grub-efi
+    mkdir_clear "$extract_dir"
+    (cd "$extract_dir" && ar x "$deb_file")
+
+    data_tar=$(ls "$extract_dir"/data.tar.* 2>/dev/null | head -1)
+    [ -n "$data_tar" ] || error_and_exit "Missing data archive in $grub_pkg."
+
+    case "$data_tar" in
+    *.xz) tar -xJf "$data_tar" -C "$extract_dir" ;;
+    *.gz) tar -xzf "$data_tar" -C "$extract_dir" ;;
+    *.zst)
+        install_pkg zstd
+        tar --use-compress-program=unzstd -xf "$data_tar" -C "$extract_dir"
+        ;;
+    *) tar -xf "$data_tar" -C "$extract_dir" ;;
+    esac
+
+    efi_path=$(find "$extract_dir" -type f -path "*/monolithic/$grub_efi" | head -1)
+    if [ -z "$efi_path" ]; then
+        efi_path=$(find "$extract_dir" -type f -name "$grub_efi" | head -1)
     fi
+
+    [ -n "$efi_path" ] || error_and_exit "Could not find $grub_efi in $grub_pkg."
+    cp -f "$efi_path" "$tmp/$grub_efi"
 
     add_efi_entry_in_linux $tmp/$grub_efi
 }
