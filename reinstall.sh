@@ -143,10 +143,6 @@ is_in_china() {
     fi
     [ "$_loc" = CN ]
 }
-is_in_alpine() {
-    [ -f /etc/alpine-release ]
-}
-
 is_boot_in_separate_partition() {
     mount | grep -q ' on /boot type '
 }
@@ -1022,7 +1018,6 @@ is_found_ipv6_netconf() {
     [ -n "$ipv6_mac" ] && [ -n "$ipv6_addr" ] && [ -n "$ipv6_gateway" ]
 }
 
-# TODO: 单网卡多IP
 collect_netconf() {
     # linux
     # 通过默认网关得到默认网卡
@@ -1043,12 +1038,39 @@ collect_netconf() {
     # default nhid 4011550343 via fe80::fc00:5ff:fe3d:2714 dev enp1s0 proto ra metric 1024 expires 1504sec pref medium
 
     for v in 4 6; do
-        if via_gateway_dev_ethx=$(ip -$v route show default | grep -Ewo 'via [^ ]+ dev [^ ]+' | head -1 | grep .); then
+        probe=
+        if [ $v -eq 4 ]; then
+            probe=1.1.1.1
+        else
+            probe=2606:4700:4700::1111
+        fi
+
+        route_line=$(ip -$v route get "$probe" 2>/dev/null | head -1)
+        ethx=$(awk '{for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}' <<<"$route_line")
+        gateway=$(awk '{for (i=1;i<=NF;i++) if ($i=="via") {print $(i+1); exit}}' <<<"$route_line")
+        src_addr=$(awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}' <<<"$route_line")
+
+        if [ -z "$ethx" ] && via_gateway_dev_ethx=$(ip -$v route show default | grep -Ewo 'via [^ ]+ dev [^ ]+' | head -1 | grep .); then
             read -r _ gateway _ ethx <<<"$via_gateway_dev_ethx"
+        fi
+
+        if [ -n "$ethx" ]; then
             eval ipv${v}_ethx="$ethx" # can_use_cloud_kernel 要用
             eval ipv${v}_mac="$(ip link show dev $ethx | grep link/ether | head -1 | awk '{print $2}')"
+
+            if [ -z "$gateway" ]; then
+                gateway=$(ip -$v route show default dev "$ethx" | awk '{for (i=1;i<=NF;i++) if ($i=="via") {print $(i+1); exit}}')
+            fi
             eval ipv${v}_gateway="$gateway"
-            eval ipv${v}_addr="$(ip -$v -o addr show scope global dev $ethx | grep -v temporary | head -1 | awk '{print $4}')"
+
+            addr=
+            if [ -n "$src_addr" ]; then
+                addr=$(ip -$v -o addr show scope global dev "$ethx" | grep -v temporary | awk -v src="$src_addr" '$4 ~ "^"src"/" {print $4; exit}')
+            fi
+            if [ -z "$addr" ]; then
+                addr=$(ip -$v -o addr show scope global dev "$ethx" | grep -v temporary | head -1 | awk '{print $4}')
+            fi
+            eval ipv${v}_addr="$addr"
         fi
     done
 
@@ -1068,8 +1090,14 @@ collect_netconf() {
 }
 
 get_maybe_efi_dirs_in_linux() {
-    # TODO: 最好通过 lsblk/blkid 检查是否为 efi 分区类型
-    mount | awk '$5=="vfat" || $5=="autofs" {print $3}' | grep -E '/boot|/efi' | sort -u
+    efi_parttype=c12a7328-f81f-11d2-ba4b-00a0c93ec93b
+    {
+        if is_have_cmd lsblk; then
+            lsblk -nrpo PARTTYPE,MOUNTPOINT 2>/dev/null |
+                awk -v uuid="$efi_parttype" 'tolower($1)==uuid && $2!="" {print $2}'
+        fi
+        mount | awk '$5=="vfat" || $5=="autofs" {print $3}' | grep -E '/boot|/efi'
+    } | sort -u | grep .
 }
 
 get_disk_by_part() {
@@ -1165,24 +1193,6 @@ install_grub_linux_efi() {
     curl -Lo "$tmp/$grub_efi" "$mirror/releases/$fedora_ver/Everything/$basearch/os/EFI/BOOT/$grub_efi"
 
     add_efi_entry_in_linux $tmp/$grub_efi
-}
-
-download_and_extract_apk() {
-    local alpine_ver=$1
-    local package=$2
-    local extract_dir=$3
-
-    install_pkg tar xz
-    is_in_china && mirror=http://mirror.nju.edu.cn/alpine || mirror=https://dl-cdn.alpinelinux.org/alpine
-    package_apk=$(curl -L $mirror/v$alpine_ver/main/$basearch/ | grep -oP "$package-[^-]*-[^-]*\.apk" | sort -u)
-    if ! [ "$(wc -l <<<"$package_apk")" -eq 1 ]; then
-        error_and_exit "find no/multi apks."
-    fi
-    mkdir -p "$extract_dir"
-
-    # 屏蔽警告
-    tar 2>&1 | grep -q BusyBox && tar_args= || tar_args=--warning=no-unknown-keyword
-    curl -L "$mirror/v$alpine_ver/main/$basearch/$package_apk" | tar xz $tar_args -C "$extract_dir"
 }
 
 

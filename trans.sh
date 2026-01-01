@@ -19,6 +19,7 @@ get_ra_to() {
             _ra="$(rdisc6 -1 "$ethx" || true)"
         else
             _ra=""
+            ra_unavailable=1
         fi
     fi
     eval "$1='$_ra'"
@@ -178,6 +179,7 @@ is_have_rdnss() {
 
 is_need_manual_set_dnsv6() {
     # 有没有可能是静态但是有 rdnss？
+    [ -n "$ra_unavailable" ] && return $FALSE
     ! is_have_ipv6 && return $FALSE
     is_dhcpv6 && return $FALSE
     is_staticv6 && return $TRUE
@@ -281,6 +283,10 @@ EOF
             fi
 
         elif is_staticv6; then
+            if [ -n "$ra_unavailable" ]; then
+                echo "iface $ethx inet6 auto" >>$conf_file
+                continue
+            fi
             get_netconf_to ipv6_addr
             get_netconf_to ipv6_gateway
             cat <<EOF >>$conf_file
