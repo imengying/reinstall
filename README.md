@@ -76,6 +76,20 @@ yum install -y curl grep openssl
 apk add curl grep openssl bash
 ```
 
+## 🧹 临时文件管理
+
+脚本运行时会创建以下临时文件：
+
+- `/reinstall-tmp/` - 临时工作目录（脚本结束时自动清理）
+- `/reinstall-vmlinuz` - 安装内核（重启后使用，正常完成时保留）
+- `/reinstall-initrd` - 初始化内存盘（重启后使用，正常完成时保留）
+- `/reinstall-firmware` - 固件文件（如需要，重启后使用）
+
+**自动清理机制：**
+- ✅ 脚本正常完成：清理 `/reinstall-tmp/`，保留安装文件
+- ✅ 脚本异常退出：清理所有临时文件
+- ✅ 用户中断（Ctrl+C）：清理所有临时文件
+
 ## 📜 许可证
 
 本项目遵循 [MIT License](LICENSE) 开源协议。

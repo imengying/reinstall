@@ -34,7 +34,35 @@ fi
 # 记录日志，过滤含有 password 的行
 exec > >(tee >(grep -iv password >>/reinstall.log)) 2>&1
 THIS_SCRIPT=$(readlink -f "$0")
+
+# 清理临时文件的函数
+cleanup_tmp() {
+    if [ -n "$tmp" ] && [ -d "$tmp" ]; then
+        info false "Cleaning up temporary files in $tmp..."
+        # 先尝试卸载可能挂载的目录
+        if mount | grep -q "$tmp"; then
+            umount_all "$tmp" 2>/dev/null || true
+        fi
+        # 删除临时目录
+        rm -rf "$tmp" 2>/dev/null || true
+    fi
+    
+    # 如果脚本异常退出，清理根目录下的临时文件
+    # 正常完成时不清理，因为这些文件需要用于重启安装
+    if [ "$?" -ne 0 ]; then
+        info false "Script failed, cleaning up installation files..."
+        rm -f /reinstall-vmlinuz 2>/dev/null || true
+        rm -f /reinstall-initrd 2>/dev/null || true
+        rm -f /reinstall-firmware 2>/dev/null || true
+    fi
+}
+
+# 设置 trap 捕获退出信号
+# EXIT: 脚本正常退出或异常退出时触发
+# INT: Ctrl+C 时触发
+# TERM: kill 命令时触发
 trap 'trap_err $LINENO $?' ERR
+trap 'cleanup_tmp' EXIT INT TERM
 
 trap_err() {
     line_no=$1
@@ -42,6 +70,7 @@ trap_err() {
 
     error "Line $line_no return $ret_no"
     sed -n "$line_no"p "$THIS_SCRIPT"
+    # 错误时也会触发 EXIT trap，所以不需要在这里调用 cleanup_tmp
 }
 
 usage_and_exit() {
@@ -52,7 +81,6 @@ Usage: ./reinstall.sh debian [9|10|11|12|13]
                        [--ssh-key   KEY]
                        [--ssh-port  PORT]
                        [--web-port  PORT]
-                       [--frpc-toml PATH]
 
 EOF
     exit 1
@@ -1462,10 +1490,6 @@ EOF
 
     curl -LO "$confhome/get-xda.sh"
     curl -LO "$confhome/ttys.sh"
-    if [ -n "$frpc_config" ]; then
-        curl -LO "$confhome/get-frpc-url.sh"
-        curl -LO "$confhome/frpc.service"
-    fi
 
     # 可以节省一点内存？
     echo 'export DEBCONF_DROP_TRANSLATIONS=1' |
@@ -1710,9 +1734,6 @@ This script is outdated, please download reinstall.sh again.
     else
         save_password $initrd_dir/configs
     fi
-    if [ -n "$frpc_config" ]; then
-        cat "$frpc_config" >$initrd_dir/configs/frpc.toml
-    fi
 
     if [ "$nextos_distro" = debian ]; then
         mod_initrd_debian
@@ -1822,8 +1843,7 @@ for o in debug force-cn help \
     passwd: password: \
     ssh-port: \
     ssh-key: public-key: \
-    web-port: http-port: \
-    frpc-conf: frpc-config: frpc-toml:; do
+    web-port: http-port:; do
     [ -n "$long_opts" ] && long_opts+=,
     long_opts+=$o
 done
@@ -1834,7 +1854,6 @@ if ! opts=$(getopt -n $0 -o "h" --long "$long_opts" -- "$@"); then
 fi
 
 # /tmp 挂载在内存的话，可能不够空间
-# 处理 --frpc--toml 时会下载文件，因此在处理参数前就创建临时目录
 tmp=/reinstall-tmp
 mkdir_clear "$tmp"
 
@@ -1853,29 +1872,6 @@ while true; do
         # 仅为了方便测试
         force_cn=1
         shift
-        ;;
-    --frpc-conf | --frpc-config | --frpc-toml)
-        [ -n "$2" ] || error_and_exit "Need value for $1"
-
-        case "$(to_lower <<<"$2")" in
-        http://* | https://*)
-            frpc_config_url=$2
-            frpc_config=$tmp/frpc_config
-            if ! curl -L "$frpc_config_url" -o "$frpc_config"; then
-                error_and_exit "Can't get frpc config from $frpc_config_url"
-            fi
-            ;;
-        *)
-            if ! { frpc_config=$(get_unix_path "$2") && [ -f "$frpc_config" ]; }; then
-                error_and_exit "File not exists: $2"
-            fi
-            ;;
-        esac
-
-        # 转为绝对路径
-        frpc_config=$(readlink -f "$frpc_config")
-
-        shift 2
         ;;
     --passwd | --password)
         [ -n "$2" ] || error_and_exit "Need value for $1"
@@ -2264,4 +2260,7 @@ else
     echo "Password: $password"
 fi
 
+echo
+info false "Installation files prepared successfully."
+info false "Temporary directory $tmp will be cleaned up."
 echo "Reboot to start the installation."
