@@ -12,7 +12,7 @@
 | 💾 **Btrfs + Zstd** | 自动开启 `compress=zstd`，大幅节省空间并延长闪存寿命。 |
 | 🔒 **安全强化** | 默认生成高强度随机密码（`/dev/urandom`），拒绝弱口令风险。 |
 | ☁️ **云端适配** | 自动修复 Azure 加速网络问题；针对部分云厂商的 DHCP/RA 行为做兼容处理。 |
-| 🔧 **灵活配置** | 支持自定义 SSH 端口、导入 SSH 公钥。 |
+| 🔧 **灵活配置** | 支持自定义 SSH 端口、主机名、导入 SSH 公钥。 |
 
 
 ## 下载
@@ -44,6 +44,9 @@ bash reinstall.sh debian 12
 ```bash
 # 指定 SSH 端口 (默认 22)
 bash reinstall.sh debian --ssh-port 2222
+
+# 指定主机名
+bash reinstall.sh debian --hostname my-debian
 
 # 指定固定密码 (不推荐，建议使用默认随机密码)
 bash reinstall.sh debian --password "MySecurePassword123!"

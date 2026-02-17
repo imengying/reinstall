@@ -37,6 +37,8 @@ THIS_SCRIPT=$(readlink -f "$0")
 
 # 清理临时文件的函数
 cleanup_tmp() {
+    exit_code=${1:-0}
+
     if [ -n "$tmp" ] && [ -d "$tmp" ]; then
         info false "Cleaning up temporary files in $tmp..."
         # 先尝试卸载可能挂载的目录
@@ -49,7 +51,7 @@ cleanup_tmp() {
     
     # 如果脚本异常退出，清理根目录下的临时文件
     # 正常完成时不清理，因为这些文件需要用于重启安装
-    if [ "$?" -ne 0 ]; then
+    if [ "$exit_code" -ne 0 ]; then
         info false "Script failed, cleaning up installation files..."
         rm -f /reinstall-vmlinuz 2>/dev/null || true
         rm -f /reinstall-initrd 2>/dev/null || true
@@ -62,7 +64,9 @@ cleanup_tmp() {
 # INT: Ctrl+C 时触发
 # TERM: kill 命令时触发
 trap 'trap_err $LINENO $?' ERR
-trap 'cleanup_tmp' EXIT INT TERM
+trap 'cleanup_tmp $?' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 trap_err() {
     line_no=$1
@@ -80,7 +84,7 @@ Usage: ./reinstall.sh debian [9|10|11|12|13]
        Options:        [--password  PASSWORD]
                        [--ssh-key   KEY]
                        [--ssh-port  PORT]
-                       [--web-port  PORT]
+                       [--hostname  NAME]
 
 EOF
     exit 1
@@ -229,6 +233,16 @@ is_digit() {
 
 is_port_valid() {
     is_digit "$1" && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
+}
+
+is_hostname_valid() {
+    local h
+    h=$1
+
+    # 支持单段主机名和 FQDN
+    [ -n "$h" ] || return 1
+    [ "${#h}" -le 253 ] || return 1
+    [[ "$h" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*$ ]]
 }
 
 get_host_by_url() {
@@ -1167,7 +1181,7 @@ add_efi_entry_in_linux() {
     install_pkg efibootmgr
 
     for efi_part in $(get_maybe_efi_dirs_in_linux); do
-        if find $efi_part -iname "*.efi" >/dev/null; then
+        if find "$efi_part" -iname "*.efi" -print -quit | grep -q .; then
             dist_dir=$efi_part/EFI/reinstall
             basename=$(basename $source)
             mkdir -p $dist_dir
@@ -1260,7 +1274,7 @@ build_extra_cmdline() {
     # https://salsa.debian.org/installer-team/rootskel/-/blob/master/src/lib/debian-installer-startup.d/S02module-params?ref_type=heads
     for key in confhome force_cn main_disk \
         elts deb_mirror \
-        ssh_port web_port; do
+        ssh_port hostname; do
         value=${!key}
         if [ -n "$value" ]; then
             is_need_quote "$value" &&
@@ -1686,7 +1700,9 @@ EOF
 }
 
 get_ip_conf_cmd() {
-    collect_netconf >&2
+    if ! is_found_ipv4_netconf && ! is_found_ipv6_netconf; then
+        collect_netconf >&2
+    fi
     is_in_china && is_in_china=true || is_in_china=false
 
     sh=/initrd-network.sh
@@ -1839,17 +1855,17 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 long_opts=
-for o in debug force-cn help \
+for o in force-cn \
     passwd: password: \
     ssh-port: \
-    ssh-key: public-key: \
-    web-port: http-port:; do
+    hostname: \
+    ssh-key: public-key:; do
     [ -n "$long_opts" ] && long_opts+=,
     long_opts+=$o
 done
 
 # 整理参数
-if ! opts=$(getopt -n $0 -o "h" --long "$long_opts" -- "$@"); then
+if ! opts=$(getopt -n $0 -o "" --long "$long_opts" -- "$@"); then
     exit
 fi
 
@@ -1861,13 +1877,6 @@ eval set -- "$opts"
 # shellcheck disable=SC2034
 while true; do
     case "$1" in
-    -h | --help)
-        usage_and_exit
-        ;;
-    --debug)
-        set -x
-        shift
-        ;;
     --force-cn)
         # 仅为了方便测试
         force_cn=1
@@ -1949,9 +1958,10 @@ EOF
         ssh_port=$2
         shift 2
         ;;
-    --web-port | --http-port)
-        is_port_valid $2 || error_and_exit "Invalid $1 value: $2"
-        web_port=$2
+    --hostname)
+        [ -n "$2" ] || error_and_exit "Need value for $1"
+        is_hostname_valid "$2" || error_and_exit "Invalid $1 value: $2"
+        hostname=$(to_lower <<<"$2")
         shift 2
         ;;
     --)
@@ -1983,8 +1993,6 @@ fi
 if [ -z "$ssh_keys" ] && [ -z "$password" ]; then
     prompt_password
 fi
-
-# 必备组件\ninstall_pkg curl grep\n
 
 # 检查硬件架构
 basearch=$(uname -m)
