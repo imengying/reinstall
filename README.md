@@ -95,4 +95,4 @@ apk add curl grep openssl bash
 
 ## 📜 许可证
 
-本项目遵循 [MIT License](LICENSE) 开源协议。
+本项目遵循 [GNU GPL v3.0](LICENSE) 开源协议。
