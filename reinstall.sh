@@ -150,13 +150,6 @@ curl() {
     done
 }
 
-mask2cidr() {
-    local x=${1##*255.}
-    set -- 0^^^128^192^224^240^248^252^254^ $(((${#1} - ${#x}) * 2)) ${x%%.*}
-    x=${1%%"$3"*}
-    echo $(($2 + (${#x} / 4)))
-}
-
 is_in_china() {
     [ "$force_cn" = 1 ] && return 0
 
@@ -183,15 +176,6 @@ is_os_in_btrfs() {
     mount | grep -q ' on / type btrfs '
 }
 
-is_os_in_subvol() {
-    subvol=$(awk '($2=="/") { print $i }' /proc/mounts | grep -o 'subvol=[^ ]*' | cut -d= -f2)
-    [ "$subvol" != / ]
-}
-
-get_os_part() {
-    awk '($2=="/") { print $1 }' /proc/mounts
-}
-
 umount_all() {
     if mount_lists=$(mount | grep -w "on $1" | awk '{print $3}' | grep .); then
         # alpine 没有 -R
@@ -201,25 +185,6 @@ umount_all() {
             echo "$mount_lists" | tac | xargs -n1 umount
         fi
     fi
-}
-
-cp_to_btrfs_root() {
-    mount_dir=$tmp/reinstall-btrfs-root
-    if ! grep -q $mount_dir /proc/mounts; then
-        mkdir -p $mount_dir
-        mount "$(get_os_part)" $mount_dir -t btrfs -o subvol=/
-    fi
-    cp -rf "$@" "$mount_dir"
-}
-
-is_host_has_ipv4_and_ipv6() {
-    host=$1
-
-    install_pkg dig
-    # dig会显示cname结果，cname结果以.结尾，grep -v '\.$' 用于去除 cname 结果
-    res=$(dig +short $host A $host AAAA | grep -v '\.$')
-    # 有.表示有ipv4地址，有:表示有ipv6地址
-    grep -q \. <<<$res && grep -q : <<<$res
 }
 
 is_use_firmware() {
@@ -243,10 +208,6 @@ is_hostname_valid() {
     [ -n "$h" ] || return 1
     [ "${#h}" -le 253 ] || return 1
     [[ "$h" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*$ ]]
-}
-
-get_host_by_url() {
-    cut -d/ -f3 <<<$1
 }
 
 get_function() {
@@ -336,135 +297,6 @@ is_virt() {
     fi
     $_is_virt
 }
-
-is_absolute_path() {
-    # 检查路径是否以/开头
-    # 注意语法和 ash 不同
-    [[ "$1" = /* ]]
-}
-
-is_cpu_supports_x86_64_v3() {
-    # 用 ld.so/cpuid/coreinfo.exe 更准确
-    # centos 7 /usr/lib64/ld-linux-x86-64.so.2 没有 --help
-    # alpine gcompat /lib/ld-linux-x86-64.so.2 没有 --help
-
-    # https://en.wikipedia.org/wiki/X86-64#Microarchitecture_levels
-    # https://learn.microsoft.com/sysinternals/downloads/coreinfo
-
-    # abm = popcnt + lzcnt
-    # /proc/cpuinfo 不显示 osxsave, 故用 xsave 代替
-
-    need_flags="avx avx2 bmi1 bmi2 f16c fma movbe xsave"
-    had_flags=$(grep -m 1 ^flags /proc/cpuinfo | awk -F': ' '{print $2}')
-
-    for flag in $need_flags; do
-        if ! grep -qw $flag <<<"$had_flags"; then
-            return 1
-        fi
-    done
-}
-
-assert_cpu_supports_x86_64_v3() {
-    if ! is_cpu_supports_x86_64_v3; then
-        error_and_exit "Could not install $distro $releasever because the CPU does not support x86-64-v3."
-    fi
-}
-
-# sr-latn-rs 到 sr-latn
-en_us() {
-    echo "$lang" | awk -F- '{print $1"-"$2}'
-
-    # zh-hk 可回落到 zh-tw
-    if [ "$lang" = zh-hk ]; then
-        echo zh-tw
-    fi
-}
-
-# fr-ca 到 ca
-us() {
-    # 葡萄牙准确对应 pp
-    if [ "$lang" = pt-pt ]; then
-        echo pp
-        return
-    fi
-    # 巴西准确对应 pt
-    if [ "$lang" = pt-br ]; then
-        echo pt
-        return
-    fi
-
-    echo "$lang" | awk -F- '{print $2}'
-
-    # hk 额外回落到 tw
-    if [ "$lang" = zh-hk ]; then
-        echo tw
-    fi
-}
-
-# fr-ca 到 fr-fr
-en_en() {
-    echo "$lang" | awk -F- '{print $1"-"$1}'
-
-    # en-gb 额外回落到 en-us
-    if [ "$lang" = en-gb ]; then
-        echo en-us
-    fi
-}
-
-# fr-ca 到 fr
-en() {
-    # 巴西/葡萄牙回落到葡萄牙语
-    if [ "$lang" = pt-br ] || [ "$lang" = pt-pt ]; then
-        echo "pp"
-        return
-    fi
-
-    echo "$lang" | awk -F- '{print $1}'
-}
-
-english() {
-    case "$lang" in
-    ar-sa) echo Arabic ;;
-    bg-bg) echo Bulgarian ;;
-    cs-cz) echo Czech ;;
-    da-dk) echo Danish ;;
-    de-de) echo German ;;
-    el-gr) echo Greek ;;
-    en-gb) echo Eng_Intl ;;
-    en-us) echo English ;;
-    es-es) echo Spanish ;;
-    es-mx) echo Spanish_Latam ;;
-    et-ee) echo Estonian ;;
-    fi-fi) echo Finnish ;;
-    fr-ca) echo FrenchCanadian ;;
-    fr-fr) echo French ;;
-    he-il) echo Hebrew ;;
-    hr-hr) echo Croatian ;;
-    hu-hu) echo Hungarian ;;
-    it-it) echo Italian ;;
-    ja-jp) echo Japanese ;;
-    ko-kr) echo Korean ;;
-    lt-lt) echo Lithuanian ;;
-    lv-lv) echo Latvian ;;
-    nb-no) echo Norwegian ;;
-    nl-nl) echo Dutch ;;
-    pl-pl) echo Polish ;;
-    pt-pt) echo Portuguese ;;
-    pt-br) echo Brazilian ;;
-    ro-ro) echo Romanian ;;
-    ru-ru) echo Russian ;;
-    sk-sk) echo Slovak ;;
-    sl-si) echo Slovenian ;;
-    sr-latn | sr-latn-rs) echo Serbian_Latin ;;
-    sv-se) echo Swedish ;;
-    th-th) echo Thai ;;
-    tr-tr) echo Turkish ;;
-    uk-ua) echo Ukrainian ;;
-    zh-cn) echo ChnSimp ;;
-    zh-hk | zh-tw) echo ChnTrad ;;
-    esac
-}
-
 
 setos() {
     local step=$1
@@ -598,11 +430,6 @@ verify_os_name() {
 
     error "Please specify debian [version]"
     usage_and_exit
-}
-
-verify_os_args() {
-    # Debian 没有特殊参数要求
-    return 0
 }
 
 get_cmd_path() {
@@ -885,13 +712,9 @@ is_secure_boot_enabled() {
     fi
 }
 
-is_need_grub_extlinux() {
-    return 0
-}
-
 # 只有 linux bios 是用本机的 grub/extlinux
 is_use_local_grub_extlinux() {
-    is_need_grub_extlinux && ! is_efi
+    ! is_efi
 }
 
 is_use_local_grub() {
@@ -918,11 +741,6 @@ to_lower() {
 
 del_empty_lines() {
     sed '/^[[:space:]]*$/d'
-}
-
-trim() {
-    # sed -E -e 's/^[[:space:]]+//' -e 's/[[:space:]]+$//'
-    sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 }
 
 prompt_password() {
@@ -1839,17 +1657,13 @@ remove_useless_initrd_files() {
     du -sh .
 }
 
-get_unix_path() {
-    printf '%s' "$1"
-}
-
 # 脚本入口
 if mount | grep -q 'tmpfs on / type tmpfs'; then
     error_and_exit "Can't run this script in Live OS."
 fi
 
 
-# 检查 root
+# 检查 root 权限
 if [ "$EUID" -ne 0 ]; then
     error_and_exit "Please run as root."
 fi
@@ -1930,7 +1744,8 @@ EOF
                 ssh_key=$2
             else
                 # 视为路径
-                if ! { ssh_key_file=$(get_unix_path "$2") && [ -f "$ssh_key_file" ]; }; then
+                ssh_key_file=$2
+                if ! [ -f "$ssh_key_file" ]; then
                     ssh_key_error_and_exit "SSH Key/File/Url \"$2\" is invalid."
                 fi
                 ssh_key=$(<"$ssh_key_file")
@@ -1978,9 +1793,6 @@ done
 # 检查目标系统名
 verify_os_name "$@"
 
-# 检查必须的参数
-verify_os_args
-
 # 不支持容器虚拟化
 assert_not_in_container
 
@@ -2017,10 +1829,8 @@ check_ram
 # 仅支持 Debian 安装器路径
 setos nextos $distro $releasever
 
-# 删除之前的条目
-# 防止第一次运行 netboot.xyz，第二次运行其他，但还是进入 netboot.xyz
-# 防止第一次运行其他，第二次运行 netboot.xyz，但还有第一次的菜单
-# bios 无论什么情况都用到 grub，所以不用处理
+# 删除上次残留的引导条目（EFI 场景）
+# 防止重复运行后仍然进入旧的 reinstall 菜单项
 if is_efi; then
     # shellcheck disable=SC2046
     find $(get_maybe_efi_dirs_in_linux) $([ -d /boot ] && echo /boot) \
@@ -2050,133 +1860,131 @@ if [ "$nextos_distro" = debian ]; then
     mod_initrd
 fi
 
-# 将内核/netboot.xyz.lkrn 放到正确的位置
+# 配置下一次启动项（grub/extlinux）
 
 # grub / extlinux
-if is_need_grub_extlinux; then
-    # linux efi 使用外部 grub，因为
-    # 1. 原系统 grub 可能没有去除 aarch64 内核 magic number 校验
-    # 2. 原系统可能不是用 grub
-    if is_efi; then
-        install_grub_linux_efi
-    fi
+# linux efi 使用外部 grub，因为
+# 1. 原系统 grub 可能没有去除 aarch64 内核 magic number 校验
+# 2. 原系统可能不是用 grub
+if is_efi; then
+    install_grub_linux_efi
+fi
 
-    # 寻找 grub.cfg / extlinux.conf
-    if is_efi; then
-        # 现在 linux-efi 是使用 reinstall 目录下的 grub
-        # shellcheck disable=SC2046
-        efi_reinstall_dir=$(find $(get_maybe_efi_dirs_in_linux) -type d -name "reinstall" | head -1)
-        grub_cfg=$efi_reinstall_dir/grub.cfg
-    else
-        if is_mbr_using_grub; then
-            if is_have_cmd update-grub; then
-                # alpine debian ubuntu
-                grub_cfg=$(grep -o '[^ ]*grub.cfg' "$(get_cmd_path update-grub)" | head -1)
-            else
-                # 找出主配置文件（含有menuentry|blscfg）
-                # 现在 efi 用下载的 grub，因此不需要查找 efi 目录
-                grub_cfg=$(find_grub_extlinux_cfg '/boot/grub*' grub.cfg 'menuentry|blscfg')
-            fi
+# 寻找 grub.cfg / extlinux.conf
+if is_efi; then
+    # 现在 linux-efi 是使用 reinstall 目录下的 grub
+    # shellcheck disable=SC2046
+    efi_reinstall_dir=$(find $(get_maybe_efi_dirs_in_linux) -type d -name "reinstall" | head -1)
+    grub_cfg=$efi_reinstall_dir/grub.cfg
+else
+    if is_mbr_using_grub; then
+        if is_have_cmd update-grub; then
+            # alpine debian ubuntu
+            grub_cfg=$(grep -o '[^ ]*grub.cfg' "$(get_cmd_path update-grub)" | head -1)
         else
-            # extlinux
-            extlinux_cfg=$(find_grub_extlinux_cfg /boot extlinux.conf LINUX)
+            # 找出主配置文件（含有menuentry|blscfg）
+            # 现在 efi 用下载的 grub，因此不需要查找 efi 目录
+            grub_cfg=$(find_grub_extlinux_cfg '/boot/grub*' grub.cfg 'menuentry|blscfg')
         fi
-    fi
-
-    # 找到 grub 程序的前缀
-    # 并重新生成 grub.cfg
-    # 因为有些机子例如hython debian的grub.cfg少了40_custom 41_custom
-    if is_use_local_grub; then
-        if is_have_cmd grub2-mkconfig; then
-            grub=grub2
-        elif is_have_cmd grub-mkconfig; then
-            grub=grub
-        else
-            error_and_exit "grub not found"
-        fi
-
-        # nixos 手动执行 grub-mkconfig -o /boot/grub/grub.cfg 会丢失系统启动条目
-        # 正确的方法是修改 configuration.nix 的 boot.loader.grub.extraEntries
-        # 但是修改 configuration.nix 不是很好，因此改成修改 grub.cfg
-        if [ -x /nix/var/nix/profiles/system/bin/switch-to-configuration ]; then
-            # 生成 grub.cfg
-            /nix/var/nix/profiles/system/bin/switch-to-configuration boot
-            # 手动启用 41_custom
-            nixos_grub_home="$(dirname "$(readlink -f "$(get_cmd_path grub-mkconfig)")")/.."
-            $nixos_grub_home/etc/grub.d/41_custom >>$grub_cfg
-        elif is_have_cmd update-grub; then
-            update-grub
-        else
-            $grub-mkconfig -o $grub_cfg
-        fi
-    fi
-
-    # 重新生成 extlinux.conf
-    if is_use_local_extlinux; then
-        if is_have_cmd update-extlinux; then
-            update-extlinux
-        fi
-    fi
-
-    # 选择用 custom.cfg (linux-bios) 还是 grub.cfg (linux-efi / win)
-    if is_use_local_grub; then
-        target_cfg=$(dirname $grub_cfg)/custom.cfg
     else
-        target_cfg=$grub_cfg
+        # extlinux
+        extlinux_cfg=$(find_grub_extlinux_cfg /boot extlinux.conf LINUX)
+    fi
+fi
+
+# 找到 grub 程序的前缀
+# 并重新生成 grub.cfg
+# 因为有些机子例如hython debian的grub.cfg少了40_custom 41_custom
+if is_use_local_grub; then
+    if is_have_cmd grub2-mkconfig; then
+        grub=grub2
+    elif is_have_cmd grub-mkconfig; then
+        grub=grub
+    else
+        error_and_exit "grub not found"
     fi
 
-    # 找到 /reinstall-vmlinuz /reinstall-initrd 的绝对路径
-    # extlinux + 单独的 boot 分区
-    # 把内核文件放在 extlinux.conf 所在的目录
-    if is_use_local_extlinux && is_boot_in_separate_partition; then
-        dir=
+    # nixos 手动执行 grub-mkconfig -o /boot/grub/grub.cfg 会丢失系统启动条目
+    # 正确的方法是修改 configuration.nix 的 boot.loader.grub.extraEntries
+    # 但是修改 configuration.nix 不是很好，因此改成修改 grub.cfg
+    if [ -x /nix/var/nix/profiles/system/bin/switch-to-configuration ]; then
+        # 生成 grub.cfg
+        /nix/var/nix/profiles/system/bin/switch-to-configuration boot
+        # 手动启用 41_custom
+        nixos_grub_home="$(dirname "$(readlink -f "$(get_cmd_path grub-mkconfig)")")/.."
+        $nixos_grub_home/etc/grub.d/41_custom >>$grub_cfg
+    elif is_have_cmd update-grub; then
+        update-grub
     else
-        # 获取当前系统根目录在 btrfs 中的绝对路径
-        if is_os_in_btrfs; then
-            # btrfs subvolume show /
-            # 输出可能是 / 或 root 或 @/.snapshots/1/snapshot
-            dir=$(btrfs subvolume show / | head -1)
-            if ! [ "$dir" = / ]; then
-                dir="/$dir/"
-            fi
-        else
-            dir=/
+        $grub-mkconfig -o $grub_cfg
+    fi
+fi
+
+# 重新生成 extlinux.conf
+if is_use_local_extlinux; then
+    if is_have_cmd update-extlinux; then
+        update-extlinux
+    fi
+fi
+
+# 选择用 custom.cfg (linux-bios) 还是 grub.cfg (linux-efi / win)
+if is_use_local_grub; then
+    target_cfg=$(dirname $grub_cfg)/custom.cfg
+else
+    target_cfg=$grub_cfg
+fi
+
+# 找到 /reinstall-vmlinuz /reinstall-initrd 的绝对路径
+# extlinux + 单独的 boot 分区
+# 把内核文件放在 extlinux.conf 所在的目录
+if is_use_local_extlinux && is_boot_in_separate_partition; then
+    dir=
+else
+    # 获取当前系统根目录在 btrfs 中的绝对路径
+    if is_os_in_btrfs; then
+        # btrfs subvolume show /
+        # 输出可能是 / 或 root 或 @/.snapshots/1/snapshot
+        dir=$(btrfs subvolume show / | head -1)
+        if ! [ "$dir" = / ]; then
+            dir="/$dir/"
         fi
-    fi
-
-    vmlinuz=${dir}reinstall-vmlinuz
-    initrd=${dir}reinstall-initrd
-    firmware=${dir}reinstall-firmware
-
-    # 设置 linux initrd 命令
-    if is_use_local_extlinux; then
-        linux_cmd=LINUX
-        initrd_cmd=INITRD
     else
-        linux_cmd="linux$efi"
-        initrd_cmd="initrd$efi"
+        dir=/
     fi
+fi
 
-    # 设置 cmdlind initrds
-    find_main_disk
-    build_cmdline
+vmlinuz=${dir}reinstall-vmlinuz
+initrd=${dir}reinstall-initrd
+firmware=${dir}reinstall-firmware
 
-    initrds="$initrd"
-    if is_use_firmware; then
-        initrds+=" $firmware"
-    fi
+# 设置 linux initrd 命令
+if is_use_local_extlinux; then
+    linux_cmd=LINUX
+    initrd_cmd=INITRD
+else
+    linux_cmd="linux$efi"
+    initrd_cmd="initrd$efi"
+fi
 
-    if is_use_local_extlinux; then
-        info extlinux
-        echo $extlinux_cfg
-        extlinux_dir="$(dirname $extlinux_cfg)"
+# 组合 cmdline 和 initrd 列表
+find_main_disk
+build_cmdline
 
-        # 不起作用
-        # 好像跟 extlinux --once 有冲突
-        sed -i "/^MENU HIDDEN/d" $extlinux_cfg
-        sed -i "/^TIMEOUT /d" $extlinux_cfg
+initrds="$initrd"
+if is_use_firmware; then
+    initrds+=" $firmware"
+fi
 
-        del_empty_lines <<EOF | tee -a $extlinux_cfg
+if is_use_local_extlinux; then
+    info extlinux
+    echo $extlinux_cfg
+    extlinux_dir="$(dirname $extlinux_cfg)"
+
+    # 这两项在部分环境会干扰一次性启动项
+    sed -i "/^MENU HIDDEN/d" $extlinux_cfg
+    sed -i "/^TIMEOUT /d" $extlinux_cfg
+
+    del_empty_lines <<EOF | tee -a $extlinux_cfg
 TIMEOUT 5
 LABEL reinstall
   MENU LABEL $(get_entry_name)
@@ -2184,61 +1992,61 @@ LABEL reinstall
   $([ -n "$initrds" ] && echo "$initrd_cmd $initrds")
   $([ -n "$cmdline" ] && echo "APPEND $cmdline")
 EOF
-        # 设置重启引导项
-        extlinux --once=reinstall $extlinux_dir
+    # 设置重启引导项
+    extlinux --once=reinstall $extlinux_dir
 
-        # 复制文件到 extlinux 工作目录
-        if is_boot_in_separate_partition; then
-            info "copying files to $extlinux_dir"
-            cp -f /reinstall-initrd $extlinux_dir
-            is_use_firmware && cp -f /reinstall-firmware $extlinux_dir
-            # 放最后，防止前两条返回非 0 而报错
-            cp -f /reinstall-vmlinuz $extlinux_dir
-        fi
-    else
-        # cloudcone 从光驱的 grub 启动，再加载硬盘的 grub.cfg
-        # menuentry "Grub 2" --id grub2 {
-        #         set root=(hd0,msdos1)
-        #         configfile /boot/grub2/grub.cfg
-        # }
+    # 复制文件到 extlinux 工作目录
+    if is_boot_in_separate_partition; then
+        info "copying files to $extlinux_dir"
+        cp -f /reinstall-initrd $extlinux_dir
+        is_use_firmware && cp -f /reinstall-firmware $extlinux_dir
+        # 放最后，防止前两条返回非 0 而报错
+        cp -f /reinstall-vmlinuz $extlinux_dir
+    fi
+else
+    # cloudcone 从光驱的 grub 启动，再加载硬盘的 grub.cfg
+    # menuentry "Grub 2" --id grub2 {
+    #         set root=(hd0,msdos1)
+    #         configfile /boot/grub2/grub.cfg
+    # }
 
-        # 加载后 $prefix 依然是光驱的 (hd96)/boot/grub
-        # 导致找不到 $prefix 目录的 grubenv，因此读取不到 next_entry
-        # 以下方法为 cloudcone 重新加载 grubenv
+    # 加载后 $prefix 依然是光驱的 (hd96)/boot/grub
+    # 导致找不到 $prefix 目录的 grubenv，因此读取不到 next_entry
+    # 以下方法为 cloudcone 重新加载 grubenv
 
-        # 需查找 2*2 个文件夹
-        # 分区：系统 / boot
-        # 文件夹：grub / grub2
-        # shellcheck disable=SC2121,SC2154
-        # cloudcone debian 能用但 ubuntu 模板用不了
-        # ubuntu 模板甚至没显示 reinstall menuentry
-        load_grubenv_if_not_loaded() {
-            if ! [ -s $prefix/grubenv ]; then
-                for dir in /boot/grub /boot/grub2 /grub /grub2; do
-                    set grubenv="($root)$dir/grubenv"
-                    if [ -s $grubenv ]; then
-                        load_env --file $grubenv
-                        if [ "${next_entry}" ]; then
-                            set default="${next_entry}"
-                            set next_entry=
-                            save_env --file $grubenv next_entry
-                        else
-                            set default="0"
-                        fi
-                        return
+    # 需查找 2*2 个文件夹
+    # 分区：系统 / boot
+    # 文件夹：grub / grub2
+    # shellcheck disable=SC2121,SC2154
+    # cloudcone debian 能用但 ubuntu 模板用不了
+    # ubuntu 模板甚至没显示 reinstall menuentry
+    load_grubenv_if_not_loaded() {
+        if ! [ -s $prefix/grubenv ]; then
+            for dir in /boot/grub /boot/grub2 /grub /grub2; do
+                set grubenv="($root)$dir/grubenv"
+                if [ -s $grubenv ]; then
+                    load_env --file $grubenv
+                    if [ "${next_entry}" ]; then
+                        set default="${next_entry}"
+                        set next_entry=
+                        save_env --file $grubenv next_entry
+                    else
+                        set default="0"
                     fi
-                done
-            fi
-        }
+                    return
+                fi
+            done
+        fi
+    }
 
-        # 生成 grub 配置
-        # 实测 centos 7 lvm 要手动加载 lvm 模块
-        info grub
-        echo $target_cfg
+    # 生成 grub 配置
+    # 实测 centos 7 lvm 要手动加载 lvm 模块
+    info grub
+    echo $target_cfg
 
-        get_function_content load_grubenv_if_not_loaded >$target_cfg
+    get_function_content load_grubenv_if_not_loaded >$target_cfg
 
-        del_empty_lines <<EOF | tee -a $target_cfg
+    del_empty_lines <<EOF | tee -a $target_cfg
 set timeout_style=menu
 set timeout=5
 menuentry "$(get_entry_name)" --unrestricted {
@@ -2251,10 +2059,9 @@ menuentry "$(get_entry_name)" --unrestricted {
 }
 EOF
 
-        # 设置重启引导项
-        if is_use_local_grub; then
-            $grub-reboot "$(get_entry_name)"
-        fi
+    # 设置重启引导项
+    if is_use_local_grub; then
+        $grub-reboot "$(get_entry_name)"
     fi
 fi
 
