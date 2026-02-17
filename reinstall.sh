@@ -1776,7 +1776,7 @@ EOF
     --hostname)
         [ -n "$2" ] || error_and_exit "Need value for $1"
         is_hostname_valid "$2" || error_and_exit "Invalid $1 value: $2"
-        hostname=$(to_lower <<<"$2")
+        hostname=$2
         shift 2
         ;;
     --)
