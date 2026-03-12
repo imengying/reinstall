@@ -4,7 +4,7 @@
 # 安装期脚本使用 ash 语法兼容集
 
 # 出错后停止运行，将进入到登录界面，防止失联
-set -eE
+set -e
 
 # 用于判断 reinstall.sh 和 trans.sh 是否兼容
 # shellcheck disable=SC2034
@@ -339,9 +339,12 @@ EOF
     done
 }
 
-# debian initrd 会寻找 main
-# 并调用本文件的 create_ifupdown_config 方法
+# 安装期执行入口
 : main
+
+if [ -z "$releasever" ] && [ -f /configs/releasever ]; then
+    releasever=$(cat /configs/releasever)
+fi
 
 if [ -d /dev/netconf ]; then
     create_ifupdown_config /etc/network/interfaces

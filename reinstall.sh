@@ -1398,26 +1398,7 @@ EOF
     # arm 即使 use_level 1 也会出现 No root file system is defined.
     sed -i 's/use_level=[29]/use_level=1/' lib/debian-installer-startup.d/S15lowmem
 
-    # 收敛 trans.sh，只保留 ifupdown 配置生成逻辑
-    # shellcheck disable=SC2154
-    insert_into_file $initrd_dir/trans.sh after '^: main' <<EOF
-        distro=$nextos_distro
-        releasever=$nextos_releasever
-        create_ifupdown_config /etc/network/interfaces
-        exit
-EOF
-    # 删除安装期 initrd 不支持的语法，以及已裁掉分支里的残留语句
-    # 删除或注释，可能会导致空方法而报错，因此改为替换成'\n: #'
-    replace='\n: #'
-    sed -Ei \
-        -e "s/> >/$replace/" \
-        -e "s/< </$replace/" \
-        -e "s/\. <\(/$replace/" \
-        -e "s/^[[:space:]]*apk[[:space:]]/$replace/" \
-        -e "s/^[[:space:]]*trap[[:space:]]/$replace/" \
-        -e "s/\\$\{.*\/\/.*\/.*\}/$replace/" \
-        -e "/^[[:space:]]*set[[:space:]]/s/E//" \
-        $initrd_dir/trans.sh
+    # trans.sh 已直接维护为 Debian 安装期 helper，无需再二次改写
 }
 
 get_disk_drivers() {
@@ -1561,6 +1542,7 @@ This script is outdated, please download reinstall.sh again.
     else
         save_password $initrd_dir/configs
     fi
+    printf '%s\n' "$nextos_releasever" >$initrd_dir/configs/releasever
 
     if [ "$nextos_distro" = debian ]; then
         mod_initrd_debian
