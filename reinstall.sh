@@ -1816,9 +1816,16 @@ if is_efi; then
         xargs -I {} efibootmgr --quiet --bootnum {} --delete-bootnum
 fi
 
-# 部分宿主启用了 kexec，先禁用以避免干扰重启安装
+# 部分宿主启用了 kexec，先禁用并尽量卸载当前已加载的 kexec 状态，避免干扰重启安装
 if [ -f /etc/default/kexec ]; then
     sed -i 's/LOAD_KEXEC=true/LOAD_KEXEC=false/' /etc/default/kexec
+fi
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl stop kexec 2>/dev/null || true
+    systemctl stop kexec-load 2>/dev/null || true
+fi
+if command -v kexec >/dev/null 2>&1; then
+    kexec -u 2>/dev/null || true
 fi
 
 # 下载 nextos 内核
