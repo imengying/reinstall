@@ -305,6 +305,13 @@ EOF
     post-up ip route add default via $ipv6_gateway dev $ethx
 EOF
             fi
+
+            get_netconf_to ipv6_extra_addrs
+            if [ -n "$ipv6_extra_addrs" ]; then
+                printf '%s\n' "$ipv6_extra_addrs" | tr ',' '\n' | while IFS= read -r addr; do
+                    [ -n "$addr" ] && echo "    post-up ip -6 addr add $addr dev $ethx" >>$conf_file
+                done
+            fi
         fi
 
         # dns

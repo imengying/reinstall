@@ -923,14 +923,29 @@ collect_netconf() {
             fi
             eval ipv${v}_gateway="$gateway"
 
+            all_addrs=$(ip -$v -o addr show scope global dev "$ethx" | grep -v temporary | awk '{print $4}')
+
             addr=
             if [ -n "$src_addr" ]; then
-                addr=$(ip -$v -o addr show scope global dev "$ethx" | grep -v temporary | awk -v src="$src_addr" '$4 ~ "^"src"/" {print $4; exit}')
+                addr=$(printf '%s\n' "$all_addrs" | awk -v src="$src_addr" '$0 ~ "^"src"/" {print; exit}')
             fi
             if [ -z "$addr" ]; then
-                addr=$(ip -$v -o addr show scope global dev "$ethx" | grep -v temporary | head -1 | awk '{print $4}')
+                addr=$(printf '%s\n' "$all_addrs" | head -1)
             fi
             eval ipv${v}_addr="$addr"
+
+            if [ $v -eq 6 ]; then
+                extra_addrs=$(printf '%s\n' "$all_addrs" | awk -v primary="$addr" '
+                    $0 != primary {
+                        if (seen) {
+                            printf ","
+                        }
+                        printf "%s", $0
+                        seen=1
+                    }
+                ')
+                eval ipv${v}_extra_addrs="$extra_addrs"
+            fi
         fi
     done
 
@@ -1525,13 +1540,13 @@ get_ip_conf_cmd() {
 
     sh=/initrd-network.sh
     if is_found_ipv4_netconf && is_found_ipv6_netconf && [ "$ipv4_mac" = "$ipv6_mac" ]; then
-        echo "'$sh' '$ipv4_mac' '$ipv4_addr' '$ipv4_gateway' '$ipv6_addr' '$ipv6_gateway' '$is_in_china'"
+        echo "'$sh' '$ipv4_mac' '$ipv4_addr' '$ipv4_gateway' '$ipv6_addr' '$ipv6_gateway' '$is_in_china' '$ipv6_extra_addrs'"
     else
         if is_found_ipv4_netconf; then
-            echo "'$sh' '$ipv4_mac' '$ipv4_addr' '$ipv4_gateway' '' '' '$is_in_china'"
+            echo "'$sh' '$ipv4_mac' '$ipv4_addr' '$ipv4_gateway' '' '' '$is_in_china' ''"
         fi
         if is_found_ipv6_netconf; then
-            echo "'$sh' '$ipv6_mac' '' '' '$ipv6_addr' '$ipv6_gateway' '$is_in_china'"
+            echo "'$sh' '$ipv6_mac' '' '' '$ipv6_addr' '$ipv6_gateway' '$is_in_china' '$ipv6_extra_addrs'"
         fi
     fi
 }
