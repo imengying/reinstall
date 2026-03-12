@@ -1,6 +1,6 @@
 #!/bin/ash
 # shellcheck shell=dash
-# alpine/debian initrd 共用此脚本
+# 安装期 initrd 网络探测与回填脚本
 
 # accept_ra 接收 RA + 自动配置网关
 # autoconf  自动配置地址，依赖 accept_ra
@@ -17,9 +17,8 @@ DHCP_TIMEOUT=15
 DNS_FILE_TIMEOUT=5
 TEST_TIMEOUT=10
 
-# 检测是否有网络是通过检测这些 IP 的端口是否开放
-# 因为 debian initrd 没有 nslookup
-# 改成 generate_204？但检测网络时可能 resolv.conf 为空
+# 通过访问常见公共地址的开放端口来判断连通性
+# 此时可能还没有稳定的 DNS 解析能力
 # HTTP 80
 # HTTPS/DOH 443
 # DOT 853
@@ -149,15 +148,8 @@ is_need_test_ipv6() {
     is_have_ipv6 && ! $ipv6_has_internet
 }
 
-# 测试方法：
-# ping   有的机器禁止
-# nc     测试 dot doh 端口是否开启
-# wget   测试下载
-
-# initrd 里面的软件版本，是否支持指定源IP/网卡
-# 软件     nc  wget  nslookup
-# debian9  ×    √   没有此软件
-# alpine   √    ×      ×
+# 优先使用 initrd 内现成的 wget / nc 做连通性测试
+# 只要目标端口可连通，就视为该协议可用
 
 test_by_wget() {
     src=$1
@@ -305,9 +297,7 @@ EOF
     db_subst netcfg/link_detect_progress interface "$ethx"
     db_progress INFO netcfg/link_detect_progress
 else
-    # alpine
-    # h3c 移动云电脑使用 udhcpc 会重复提示 sending select，无法获得 ipv6
-    # dhcpcd 会配置租约时间，过期会移除 IP，但我们的没有在后台运行 dhcpcd ，因此用 udhcpc
+    # 兜底分支使用 udhcpc/udhcpc6；避免额外后台守护进程改写租约
     method=udhcpc
 
     case "$method" in
@@ -355,10 +345,8 @@ is_have_ipv4_addr && dhcpv4=true || dhcpv4=false
 is_have_ipv6_addr && dhcpv6_or_slaac=true || dhcpv6_or_slaac=false
 is_have_ipv6_gateway && ra_has_gateway=true || ra_has_gateway=false
 
-# 如果自动获取的 IP 不是重装前的，则改成静态，使用之前的 IP
-# 只比较 IP，不比较掩码/网关，因为
-# 1. 假设掩码/网关导致无法上网，后面也会检测到并改成静态
-# 2. openSUSE wicked dhcpv6 是 64 位掩码，aws lightsail 模板上的也是，而其它 dhcpv6 软件都是 128 位掩码
+# 如果自动获取的地址与重装前不同，则切回静态配置
+# 这里只比较地址本身；掩码和网关差异留到后续连通性检测再处理
 if $dhcpv4 && [ -n "$ipv4_addr" ] && [ -n "$ipv4_gateway" ] &&
     ! [ "$(echo "$ipv4_addr" | cut -d/ -f1)" = "$(get_first_ipv4_addr | cut -d/ -f1)" ]; then
     echo "IPv4 address obtained from DHCP is different from old system."
@@ -373,7 +361,7 @@ if $dhcpv6_or_slaac && [ -n "$ipv6_addr" ] && [ -n "$ipv6_gateway" ] &&
     flush_ipv6_config
 fi
 
-# 设置静态地址，或者设置 debian 9 udhcpc 无法设置的网关
+# 设置静态地址，必要时补齐 DHCP 未正确下发的网关
 add_missing_ipv4_config
 add_missing_ipv6_config
 
@@ -407,14 +395,8 @@ if ! $ipv6_has_internet &&
     test_internet
 fi
 
-# 要删除不联网协议的ip，因为
-# 1 甲骨文云管理面板添加ipv6地址然后取消
-#   依然会分配ipv6地址，但ipv6没网络
-#   此时alpine只会用ipv6下载apk，而不用会ipv4下载
-# 2 有ipv4地址但没有ipv4网关的情况(vultr $2.5 ipv6 only)，aria2会用ipv4下载
-
-# 假设 ipv4 ipv6 在不同网卡，ipv4 能上网但 ipv6 不能上网，这时也要删除 ipv6
-# 不能用 ipv4_has_internet && ! ipv6_has_internet 判断，因为它判断的是同一个网卡
+# 删除不通协议的地址，避免后续下载优先走到坏路径
+# 即使 IPv4/IPv6 分别落在不同网卡，也要分别按协议裁剪
 if ! $ipv4_has_internet; then
     if $dhcpv4; then
         should_disable_dhcpv4=true

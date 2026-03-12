@@ -2,24 +2,13 @@
 Description=Fix Eth Name
 ConditionPathExists=/fix-eth-name.sh
 
-After=dbus.service
-
-Before=cloud-init-local.service
-Before=network.service
 Before=networking.service
-Before=systemd-networkd.service
-Before=NetworkManager.service
-Before=wickedd-auto4.service
-Before=wickedd-dhcp4.service
-Before=wickedd-dhcp6.service
-Before=wickedd.service
-
 Before=network.target
 
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/env bash /fix-eth-name.sh
-ExecStart=/usr/bin/env sh -c 'rm -f /fix-eth-name.sh /etc/systemd/system/fix-eth-name.service /etc/systemd/system/multi-user.target.wants/fix-eth-name.service /lib/systemd/system-preset/01-fix-eth-name.preset /usr/lib/systemd/system-preset/01-fix-eth-name.preset'
+ExecStart=/usr/bin/env sh -c 'rm -f /fix-eth-name.sh /etc/systemd/system/fix-eth-name.service /etc/systemd/system/multi-user.target.wants/fix-eth-name.service'
 
 [Install]
 WantedBy=multi-user.target

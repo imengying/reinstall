@@ -1,7 +1,7 @@
 #!/bin/ash
 # shellcheck shell=dash
 # shellcheck disable=SC2086,SC3047,SC3036,SC3010,SC3001,SC3060
-# alpine 默认使用 busybox ash
+# 安装期脚本使用 ash 语法兼容集
 
 # 出错后停止运行，将进入到登录界面，防止失联
 set -eE
@@ -42,8 +42,8 @@ get_netconf_to() {
     eval "$1='$res'"
 }
 
-# 有 dhcpv4 不等于有网关，例如 vultr 纯 ipv6
-# 没有 dhcpv4 不等于是静态ip，可能是没有 ip
+# 有 dhcpv4 不等于一定有默认网关
+# 没有 dhcpv4 也不等于一定是静态地址
 is_dhcpv4() {
     if ! is_ipv4_has_internet || should_disable_dhcpv4; then
         return 1
@@ -150,8 +150,7 @@ is_dhcpv6() {
     get_netconf_to dhcpv6
 
     # shellcheck disable=SC2154
-    # 甲骨文即使没有添加 IPv6 地址，RA DHCPv6 标志也是开的
-    # 部分系统开机需要等 DHCPv6 超时
+    # 某些环境会宣告 DHCPv6，但实际拿不到可用 IPv6 地址
     # 这种情况需要禁用 DHCPv6
     if [ "$dhcpv6" = 1 ] && ! ip -6 -o addr show scope global dev "$ethx" | grep -q .; then
         echo 'DHCPv6 flag is on, but DHCPv6 is not working.'
@@ -225,7 +224,7 @@ EOF
     for ethx in $(get_eths); do
         mode=auto
 
-        # dmit debian 普通内核和云内核网卡名不一致，因此需要 rename
+        # 安装期内核和目标系统内核的网卡命名可能不一致，因此保留 MAC 标记
         # 安装系统时 ens18
         # 普通内核   ens18
         # 云内核     enp6s18

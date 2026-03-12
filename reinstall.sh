@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# nixos 默认的配置不会生成 /bin/bash
+# 部分系统未提供 /bin/bash，因此统一走 env bash
 # shellcheck disable=SC2086
 
 set -eE
@@ -15,7 +15,7 @@ export LC_ALL=C
 # 处理部分用户用 su 切换成 root 导致环境变量没 sbin 目录
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH
 
-# 如果不是 bash 的话，继续执行会有语法错误，因此在这里判断是否 bash
+# 脚本依赖 bash；极简宿主上先补齐或切换到 bash
 if [ -z "$BASH" ]; then
     if [ -f /etc/alpine-release ]; then
         if ! apk add bash; then
@@ -132,9 +132,7 @@ error_and_exit() {
 curl() {
     is_have_cmd curl || install_pkg curl
 
-    # 添加 -f, --fail，不然 404 退出码也为0
-    # centos 7 curl 不支持 --retry-connrefused --retry-all-errors
-    # 因此手动 retry
+    # 使用手动重试，兼容较旧的 curl 实现
     grep -o 'http[^ ]*' <<<"$@" >&2
     for i in $(seq 5); do
         if command curl --insecure --connect-timeout 10 -f "$@"; then
@@ -319,8 +317,6 @@ setos() {
         11) codename=bullseye ;;
         12) codename=bookworm ;;
         13) codename=trixie ;;
-        14) codename=forky ;;
-        15) codename=duke ;;
         esac
 
         if is_debian_elts && is_in_china; then
@@ -653,10 +649,7 @@ is_valid_ram_size() {
 check_ram() {
     ram_standard=256
 
-    # lsmem最准确但 centos7 arm 和 alpine 不能用，debian 9 util-linux 没有 lsmem
-    # arm 24g dmidecode 显示少了128m
-    # arm 24g lshw 显示23BiB
-    # ec2 t4g arm alpine 用 lsmem 和 dmidecode 都无效，要用 lshw，但结果和free -m一致，其他平台则没问题
+    # 按 lsmem -> dmidecode -> lshw -> /proc/meminfo 逐级兜底
     install_pkg lsmem
     ram_size=$(lsmem -b 2>/dev/null | grep 'Total online memory:' | awk '{ print $NF/1024/1024 }')
 
@@ -667,7 +660,7 @@ check_ram() {
 
     if ! is_valid_ram_size "$ram_size"; then
         install_pkg lshw
-        # 不能忽略 -i，alpine 显示的是 System memory
+        # 保留 -i，兼容不同大小写输出
         ram_str=$(lshw -c memory -short | grep -i 'System Memory' | awk '{print $3}')
         ram_size=$(grep <<<$ram_str -o '[0-9]*')
         grep <<<$ram_str GiB && ram_size=$((ram_size * 1024))
@@ -1138,18 +1131,14 @@ get_entry_name() {
 
 # shellcheck disable=SC2154
 build_nextos_cmdline() {
-    if [ $nextos_distro = alpine ]; then
-        nextos_cmdline="alpine_repo=$nextos_repo modloop=$nextos_modloop"
-    else
-        nextos_cmdline="lowmem/low=1 auto=true priority=critical"
-        nextos_cmdline+=" url=$nextos_ks"
-        nextos_cmdline+=" mirror/http/hostname=${nextos_udeb_mirror%/*}"
-        nextos_cmdline+=" mirror/http/directory=/${nextos_udeb_mirror##*/}"
-        nextos_cmdline+=" base-installer/kernel/image=$nextos_kernel"
-        # elts 的 debian 不能用 security 源，否则安装过程会提示无法访问
-        if [ "$nextos_distro" = debian ] && is_debian_elts; then
-            nextos_cmdline+=" apt-setup/services-select="
-        fi
+    nextos_cmdline="lowmem/low=1 auto=true priority=critical"
+    nextos_cmdline+=" url=$nextos_ks"
+    nextos_cmdline+=" mirror/http/hostname=${nextos_udeb_mirror%/*}"
+    nextos_cmdline+=" mirror/http/directory=/${nextos_udeb_mirror##*/}"
+    nextos_cmdline+=" base-installer/kernel/image=$nextos_kernel"
+    # elts 的 debian 不能用 security 源，否则安装过程会提示无法访问
+    if [ "$nextos_distro" = debian ] && is_debian_elts; then
+        nextos_cmdline+=" apt-setup/services-select="
     fi
 
     if [ "$nextos_distro" = debian ]; then
@@ -1195,12 +1184,10 @@ mkdir_clear() {
 }
 
 mod_initrd_debian() {
-    # hack 1
-    # 允许设置 ipv4 onlink 网关
+    # 允许配置 IPv4 onlink 网关
     sed -Ei 's,&&( onlink=),||\1,' etc/udhcpc/default.script
 
-    # hack 2
-    # 修改 /var/lib/dpkg/info/netcfg.postinst 运行我们的脚本
+    # 改写 netcfg.postinst，在安装期采集并固化网络配置
     netcfg() {
         #!/bin/sh
         # shellcheck source=/dev/null
@@ -1411,9 +1398,7 @@ EOF
     # arm 即使 use_level 1 也会出现 No root file system is defined.
     sed -i 's/use_level=[29]/use_level=1/' lib/debian-installer-startup.d/S15lowmem
 
-    # hack 3
-    # 修改 trans.sh
-    # 1. 直接调用 create_ifupdown_config
+    # 收敛 trans.sh，只保留 ifupdown 配置生成逻辑
     # shellcheck disable=SC2154
     insert_into_file $initrd_dir/trans.sh after '^: main' <<EOF
         distro=$nextos_distro
@@ -1421,14 +1406,7 @@ EOF
         create_ifupdown_config /etc/network/interfaces
         exit
 EOF
-    # 2. 删除 debian busybox 无法识别的语法
-    # 3. 删除 apk 语句
-    # 4. debian 11/12 initrd 无法识别 > >
-    # 5. debian 11/12 initrd 无法识别 < <
-    # 6. debian 11 initrd 无法识别 set -E
-    # 7. debian 11 initrd 无法识别 trap ERR
-    # 8. debian 9 initrd 无法识别 ${string//find/replace}
-    # 9. debian 12 initrd 无法识别 . <(
+    # 删除安装期 initrd 不支持的语法，以及已裁掉分支里的残留语句
     # 删除或注释，可能会导致空方法而报错，因此改为替换成'\n: #'
     replace='\n: #'
     sed -Ei \
@@ -1588,8 +1566,7 @@ This script is outdated, please download reinstall.sh again.
         mod_initrd_debian
     fi
 
-    # alpine live 不精简 initrd
-    # 因为不知道用户想干什么，可能会用到精简的文件
+    # 虚拟化环境下精简 initrd，尽量减少内存占用
     if is_virt; then
         remove_useless_initrd_files
     fi
@@ -1857,7 +1834,7 @@ if is_efi; then
         xargs -I {} efibootmgr --quiet --bootnum {} --delete-bootnum
 fi
 
-# 有的机器开启了 kexec，例如腾讯云轻量 debian，要禁用
+# 部分宿主启用了 kexec，先禁用以避免干扰重启安装
 if [ -f /etc/default/kexec ]; then
     sed -i 's/LOAD_KEXEC=true/LOAD_KEXEC=false/' /etc/default/kexec
 fi
