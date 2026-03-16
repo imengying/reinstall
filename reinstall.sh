@@ -1141,19 +1141,8 @@ build_nextos_cmdline() {
         nextos_cmdline+=" apt-setup/services-select="
     fi
 
-    if [ "$nextos_distro" = debian ]; then
-        if [ "$basearch" = "x86_64" ]; then
-            # debian installer 好像第一个 tty 是主 tty
-            # 设置ttyS0,tty0,安装界面还是显示在ttyS0
-            :
-        else
-            # debian arm 在没有ttyAMA0的机器上（aws t4g），最少要设置一个tty才能启动
-            # 只设置tty0也行，但安装过程ttyS0没有显示
-            nextos_cmdline+=" $(echo_tmp_ttys)"
-        fi
-    else
-        nextos_cmdline+=" $(echo_tmp_ttys)"
-    fi
+    # 显式带上控制台参数，方便云厂商串口/网页控制台查看安装进度
+    nextos_cmdline+=" $(echo_tmp_ttys)"
     # nextos_cmdline+=" mem=256M"
     # nextos_cmdline+=" lowmem=+1"
 }
@@ -1533,7 +1522,8 @@ This script is outdated, please download reinstall.sh again.
     fi
 
     curl -Lo $initrd_dir/initrd-network.sh $confhome/initrd-network.sh
-    chmod a+x $initrd_dir/trans.sh $initrd_dir/initrd-network.sh
+    curl -Lo $initrd_dir/patch-partman-btrfs.sh $confhome/patch-partman-btrfs.sh
+    chmod a+x $initrd_dir/trans.sh $initrd_dir/initrd-network.sh $initrd_dir/patch-partman-btrfs.sh
 
     # 保存配置
     mkdir -p $initrd_dir/configs
