@@ -53,7 +53,7 @@ cleanup_tmp() {
         # 删除临时目录
         rm -rf "$tmp" 2>/dev/null || true
     fi
-    
+
     # 如果脚本异常退出，清理根目录下的临时文件
     # 正常完成时不清理，因为这些文件需要用于重启安装
     if [ "$exit_code" -ne 0 ]; then
@@ -928,10 +928,17 @@ find_main_disk() {
     # 查找主硬盘时，优先查找 /boot 分区，再查找 / 分区
     # lvm 显示的是 /dev/mapper/xxx-yyy，再用第二条命令得到sda
     mapper=$(mount | awk '$3=="/boot" {print $1}' | grep . || mount | awk '$3=="/" {print $1}')
+    if [ -z "$mapper" ]; then
+        error_and_exit "Could not find root or boot mount source."
+    fi
+
     xda=$(lsblk -rn --inverse $mapper | grep -w disk | awk '{print $1}' | sort -u)
+    if [ -z "$xda" ]; then
+        error_and_exit "Could not find main disk from $mapper."
+    fi
 
     # 检测主硬盘是否横跨多个磁盘
-    os_across_disks_count=$(wc -l <<<"$xda")
+    os_across_disks_count=$(awk 'NF {count++} END {print count+0}' <<<"$xda")
     if [ $os_across_disks_count -eq 1 ]; then
         info "Main disk: $xda"
     else
@@ -1220,9 +1227,9 @@ find_grub_extlinux_cfg() {
             -exec grep -E -l "$keyword" {} \;
     )
 
-    count="$(wc -l <<<"$cfgs")"
+    count="$(awk 'NF {count++} END {print count+0}' <<<"$cfgs")"
     if [ "$count" -eq 1 ]; then
-        echo "$cfgs"
+        awk 'NF {print}' <<<"$cfgs"
     else
         error_and_exit "Find $count $filename."
     fi
@@ -1465,7 +1472,10 @@ EOF
         fi
 
         # 下载 deb/udeb
-        deb_path=$(grep -F "/${package}_" "$deb_list")
+        deb_path=$(grep -F "/${package}_" "$deb_list" | head -1 || true)
+        if [ -z "$deb_path" ]; then
+            error_and_exit "Could not find package $package in $url."
+        fi
         curl -Lo $tmp/tmp.deb http://$mirror/"$deb_path"
 
         # 使用 ar tar xz
@@ -1660,8 +1670,10 @@ can_use_cloud_kernel() {
     echo "$drivers" | grep -Ewq "$cloud_blk_modules" || return 1
 
     # net
+    [ $# -gt 0 ] || return 1
+
     # v4 v6 eth 相同，只检查一次
-    if [ "$1" = "$2" ]; then
+    if [ $# -gt 1 ] && [ "$1" = "$2" ]; then
         shift
     fi
     while [ $# -gt 0 ]; do
