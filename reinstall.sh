@@ -1291,6 +1291,9 @@ build_nextos_cmdline() {
     if is_debian_elts; then
         nextos_cmdline+=" apt-setup/services-select="
     fi
+    if [ "${nextos_releasever:-0}" -ge 13 ]; then
+        nextos_cmdline+=" systemd.ssh_auto=no"
+    fi
 
     # 安装器阶段不追加 console 参数，避免 Debian installer 界面被固定到串口。
     if ttys=$(echo_tmp_ttys); then
