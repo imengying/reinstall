@@ -1265,11 +1265,9 @@ build_extra_cmdline() {
 
 echo_tmp_ttys() {
     case "$basearch" in
-    # x86 Debian installer 同时设置 ttyS0/tty0 时，安装界面仍可能被放到串口。
-    # 不主动追加 console 参数，让 installer 优先使用 VNC/framebuffer。
-    x86_64) : ;;
-    # 部分 arm64 云主机不显式设置 tty 会卡在早期启动，保留串口和 VNC 输出。
-    aarch64) echo "console=ttyS0,115200n8 console=ttyAMA0,115200n8 console=tty0" ;;
+    # 安装器阶段不主动追加 console=，让 debian-installer 优先留在 framebuffer/VNC。
+    # 目标系统的 console 参数仍由 debian.cfg 里的 debian-installer/add-kernel-opts 设置。
+    x86_64 | aarch64) : ;;
     esac
 }
 
@@ -1294,7 +1292,7 @@ build_nextos_cmdline() {
         nextos_cmdline+=" apt-setup/services-select="
     fi
 
-    # arm64 需要显式带控制台参数；x86 不追加，避免 Debian installer 界面被固定到串口。
+    # 安装器阶段不追加 console 参数，避免 Debian installer 界面被固定到串口。
     if ttys=$(echo_tmp_ttys); then
         if [ -n "$ttys" ]; then
             nextos_cmdline+=" $ttys"
