@@ -1263,14 +1263,6 @@ build_extra_cmdline() {
     fi
 }
 
-echo_tmp_ttys() {
-    case "$basearch" in
-    # 安装器阶段不主动追加 console=，让 debian-installer 优先留在 framebuffer/VNC。
-    # 目标系统的 console 参数仍由 debian.cfg 里的 debian-installer/add-kernel-opts 设置。
-    x86_64 | aarch64) : ;;
-    esac
-}
-
 get_entry_name() {
     printf 'reinstall ('
     printf '%s' "$distro"
@@ -1296,11 +1288,6 @@ build_nextos_cmdline() {
     fi
 
     # 安装器阶段不追加 console 参数，避免 Debian installer 界面被固定到串口。
-    if ttys=$(echo_tmp_ttys); then
-        if [ -n "$ttys" ]; then
-            nextos_cmdline+=" $ttys"
-        fi
-    fi
     # nextos_cmdline+=" mem=256M"
     # nextos_cmdline+=" lowmem=+1"
 }
@@ -1520,7 +1507,6 @@ EOF
     curl -LO "$confhome/fix-eth-name.service"
 
     curl -LO "$confhome/get-xda.sh"
-    curl -LO "$confhome/ttys.sh"
 
     # 可以节省一点内存？
     menu_bin=$(first_existing_path \
@@ -2289,6 +2275,9 @@ if [ -n "$ssh_keys" ]; then
 else
     echo "Username: root"
     echo "Password: $password"
+fi
+if [ -n "$ssh_port" ]; then
+    echo "SSH Port: $ssh_port"
 fi
 
 echo "Reboot to start the installation."
