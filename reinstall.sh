@@ -90,6 +90,9 @@ Usage: ./reinstall.sh debian [9|10|11|12|13]
                        [--ssh-key   KEY]
                        [--ssh-port  PORT]
                        [--hostname  NAME]
+                       [--timezone  TIMEZONE]
+                       [--bbr]
+                       [--ethx]
 
 EOF
     exit 1
@@ -230,6 +233,10 @@ is_hostname_valid() {
     [ -n "$h" ] || return 1
     [ "${#h}" -le 253 ] || return 1
     [[ "$h" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*$ ]]
+}
+
+is_timezone_valid() {
+    [[ "$1" =~ ^[A-Za-z0-9._+-]+(/[A-Za-z0-9._+-]+)*$ ]]
 }
 
 get_function() {
@@ -1248,9 +1255,13 @@ build_extra_cmdline() {
     # https://salsa.debian.org/installer-team/rootskel/-/blob/master/src/lib/debian-installer-startup.d/S02module-params?ref_type=heads
     for key in confhome force_cn main_disk \
         elts deb_mirror \
-        ssh_port hostname; do
+        ssh_port hostname timezone bbr ethx; do
         value=${!key}
-        if [ -n "$value" ]; then
+        if [ "$key" = bbr ] || [ "$key" = ethx ]; then
+            if [ -n "$value" ]; then
+                extra_cmdline+=" extra_$key=$value"
+            fi
+        elif [ -n "$value" ]; then
             is_need_quote "$value" &&
                 extra_cmdline+=" extra_$key='$value'" ||
                 extra_cmdline+=" extra_$key=$value"
@@ -1843,6 +1854,9 @@ for o in force-cn \
     passwd: password: \
     ssh-port: \
     hostname: \
+    timezone: \
+    bbr \
+    ethx \
     ssh-key: public-key:; do
     if [ -n "$long_opts" ]; then
         long_opts+=,
@@ -1950,6 +1964,20 @@ EOF
         is_hostname_valid "$2" || error_and_exit "Invalid $1 value: $2"
         hostname=$2
         shift 2
+        ;;
+    --timezone)
+        [ -n "$2" ] || error_and_exit "Need value for $1"
+        is_timezone_valid "$2" || error_and_exit "Invalid $1 value: $2"
+        timezone=$2
+        shift 2
+        ;;
+    --bbr)
+        bbr=1
+        shift
+        ;;
+    --ethx)
+        ethx=1
+        shift
         ;;
     --)
         shift
