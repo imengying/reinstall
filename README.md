@@ -27,7 +27,6 @@ jsDelivr：
 
 ```bash
 curl -O https://cdn.jsdelivr.net/gh/imengying/reinstall@main/reinstall.sh || wget -O ${_##*/} $_
-bash reinstall.sh debian --jsdelivr
 ```
 
 ## 🚀 快速开始
