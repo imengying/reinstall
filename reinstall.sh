@@ -7,7 +7,9 @@
 # 安装运行时依赖，或作为引导组件来源，不表示支持重装为那些系统。
 
 set -eE
-confhome=https://raw.githubusercontent.com/imengying/reinstall/main
+github_confhome=https://raw.githubusercontent.com/imengying/reinstall/main
+jsdelivr_confhome=https://cdn.jsdelivr.net/gh/imengying/reinstall@main
+confhome=$github_confhome
 
 # 用于判断 reinstall.sh 和 trans.sh 是否兼容
 SCRIPT_VERSION=4BACD833-A585-23BA-6CBB-9AA4E08E0003
@@ -93,6 +95,7 @@ Usage: ./reinstall.sh debian [9|10|11|12|13]
                        [--timezone  TIMEZONE]
                        [--bbr]
                        [--ethx]
+                       [--jsdelivr]
 
 EOF
     exit 1
@@ -349,11 +352,20 @@ is_virt() {
     $_is_virt
 }
 
+set_var() {
+    # 动态变量名由脚本内部生成，使用 Bash printf -v 避免 eval 展开变量值。
+    printf -v "$1" '%s' "$2"
+}
+
 setos() {
     local step=$1
     local distro=$2
     local releasever=$3
     info set $step $distro $releasever
+
+    set_osvar() {
+        set_var "${step}_$1" "$2"
+    }
 
     # Debian-only: 精简版只保留 Debian 目标系统配置。
     # 后续如出现其它发行版名称，通常是宿主兼容或上游遗留注释。
@@ -445,20 +457,20 @@ Continue?
         # 传统安装
         initrd_dir=dists/$codename/main/installer-$basearch_alt/current/images/netboot/debian-installer/$basearch_alt
 
-        eval ${step}_udeb_mirror=$udeb_mirror
-        eval ${step}_vmlinuz=https://$initrd_mirror/$initrd_dir/linux
-        eval ${step}_initrd=https://$initrd_mirror/$initrd_dir/initrd.gz
-        eval ${step}_ks=$confhome/debian.cfg
-        eval ${step}_firmware=$cdimage_mirror/unofficial/non-free/firmware/$codename/current/firmware.cpio.gz
-        eval ${step}_codename=$codename
+        set_osvar udeb_mirror "$udeb_mirror"
+        set_osvar vmlinuz "https://$initrd_mirror/$initrd_dir/linux"
+        set_osvar initrd "https://$initrd_mirror/$initrd_dir/initrd.gz"
+        set_osvar ks "$confhome/debian.cfg"
+        set_osvar firmware "$cdimage_mirror/unofficial/non-free/firmware/$codename/current/firmware.cpio.gz"
+        set_osvar codename "$codename"
 
         # 官方安装会用到的
-        eval ${step}_deb_mirror=$deb_mirror
-        eval ${step}_kernel=linux-image$flavour-$basearch_alt
+        set_osvar deb_mirror "$deb_mirror"
+        set_osvar kernel "linux-image$flavour-$basearch_alt"
     }
 
-    eval ${step}_distro=$distro
-    eval ${step}_releasever=$releasever
+    set_osvar distro "$distro"
+    set_osvar releasever "$releasever"
 
     case "$distro" in
     debian) setos_debian ;;
@@ -1020,13 +1032,13 @@ collect_netconf() {
         fi
 
         if [ -n "$ethx" ]; then
-            eval ipv${v}_ethx="$ethx" # can_use_cloud_kernel 要用
-            eval ipv${v}_mac="$(ip link show dev $ethx | grep link/ether | head -1 | awk '{print $2}')"
+            set_var ipv${v}_ethx "$ethx" # can_use_cloud_kernel 要用
+            set_var ipv${v}_mac "$(ip link show dev "$ethx" | grep link/ether | head -1 | awk '{print $2}')"
 
             if [ -z "$gateway" ]; then
                 gateway=$(ip -$v route show default dev "$ethx" | awk '{for (i=1;i<=NF;i++) if ($i=="via") {print $(i+1); exit}}')
             fi
-            eval ipv${v}_gateway="$gateway"
+            set_var ipv${v}_gateway "$gateway"
 
             all_addrs=$(ip -$v -o addr show scope global dev "$ethx" | grep -v temporary | awk '{print $4}')
 
@@ -1037,7 +1049,7 @@ collect_netconf() {
             if [ -z "$addr" ]; then
                 addr=$(printf '%s\n' "$all_addrs" | head -1)
             fi
-            eval ipv${v}_addr="$addr"
+            set_var ipv${v}_addr "$addr"
 
             if [ $v -eq 6 ]; then
                 extra_addrs=$(printf '%s\n' "$all_addrs" | awk -v primary="$addr" '
@@ -1049,7 +1061,7 @@ collect_netconf() {
                         seen=1
                     }
                 ')
-                eval ipv${v}_extra_addrs="$extra_addrs"
+                set_var ipv${v}_extra_addrs "$extra_addrs"
             fi
         fi
     done
@@ -1857,6 +1869,7 @@ for o in force-cn \
     timezone: \
     bbr \
     ethx \
+    jsdelivr \
     ssh-key: public-key:; do
     if [ -n "$long_opts" ]; then
         long_opts+=,
@@ -1977,6 +1990,10 @@ EOF
         ;;
     --ethx)
         ethx=1
+        shift
+        ;;
+    --jsdelivr)
+        confhome=$jsdelivr_confhome
         shift
         ;;
     --)

@@ -17,8 +17,17 @@
 
 ## 下载
 
+GitHub Raw：
+
 ```bash
 curl -O https://raw.githubusercontent.com/imengying/reinstall/main/reinstall.sh || wget -O ${_##*/} $_
+```
+
+jsDelivr：
+
+```bash
+curl -O https://cdn.jsdelivr.net/gh/imengying/reinstall@main/reinstall.sh || wget -O ${_##*/} $_
+bash reinstall.sh debian --jsdelivr
 ```
 
 ## 🚀 快速开始
@@ -56,6 +65,9 @@ bash reinstall.sh debian --bbr
 
 # 使用传统网卡命名 eth0、eth1
 bash reinstall.sh debian --ethx
+
+# 使用 jsDelivr 下载项目配置和辅助文件
+bash reinstall.sh debian --jsdelivr
 
 # 指定固定密码 (不推荐，建议使用默认随机密码)
 bash reinstall.sh debian --password "MySecurePassword123!"

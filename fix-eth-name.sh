@@ -14,12 +14,21 @@ has_eth=false
 check_count=0
 stable_count=0
 old_state=
+max_wait=60
+stable_wait=10
 while true; do
     check_count=$((check_count + 1))
 
-    new_state=$(ip -o link | awk '$2 != "lo:"')
+    # 只比较接口名和链路层地址，忽略 UP/DOWN、qdisc 等运行状态变化。
+    new_state=$(
+        ip -o link |
+            awk '$2 != "lo:" { for (i = 1; i < NF; i++) if ($i ~ /^link\//) { print $2, $(i + 1); break } }' |
+            sort
+    )
     if [ -n "$new_state" ]; then
         has_eth=true
+    else
+        has_eth=false
     fi
 
     if $has_eth && [ "$old_state" = "$new_state" ]; then
@@ -30,12 +39,17 @@ while true; do
 
     old_state=$new_state
 
-    if $has_eth && [ "$stable_count" -ge 10 ]; then
+    if $has_eth && [ "$stable_count" -ge "$stable_wait" ]; then
         break
     fi
 
-    if ! $has_eth && [ "$check_count" -ge 60 ]; then
-        exit 1
+    if [ "$check_count" -ge "$max_wait" ]; then
+        if ! $has_eth; then
+            echo "No network interface found after ${max_wait}s." >&2
+            exit 1
+        fi
+        echo "Network interface names did not stabilize after ${max_wait}s; continuing with the latest state." >&2
+        break
     fi
 
     sleep 1
