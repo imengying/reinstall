@@ -29,8 +29,6 @@ jsDelivr：
 curl -O https://cdn.jsdelivr.net/gh/imengying/reinstall@main/reinstall.sh || wget -O ${_##*/} $_
 ```
 
-默认从 GitHub Raw 下载项目配置和辅助文件；使用 `--jsdelivr` 时全部改从 jsDelivr 下载。`debian.cfg` 会在重启前封装进 initrd，安装器不需要再次访问 GitHub Raw 或 jsDelivr。
-
 ## 🚀 快速开始
 
 ### 1. 标准安装 (推荐)
@@ -67,7 +65,7 @@ bash reinstall.sh debian --bbr
 # 使用传统网卡命名 eth0、eth1
 bash reinstall.sh debian --ethx
 
-# 使用 jsDelivr 下载全部项目配置和辅助文件
+# 使用 jsDelivr 下载项目配置和辅助文件
 bash reinstall.sh debian --jsdelivr
 
 # 指定固定密码 (不推荐，建议使用默认随机密码)

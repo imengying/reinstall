@@ -1340,6 +1340,7 @@ get_entry_name() {
 # shellcheck disable=SC2154
 build_nextos_cmdline() {
     nextos_cmdline="lowmem/low=1 auto=true priority=critical"
+    nextos_cmdline+=" url=$nextos_ks"
     nextos_cmdline+=" mirror/http/hostname=${nextos_udeb_mirror%/*}"
     nextos_cmdline+=" mirror/http/directory=/${nextos_udeb_mirror##*/}"
     nextos_cmdline+=" base-installer/kernel/image=$nextos_kernel"
@@ -1785,13 +1786,6 @@ mod_initrd() {
     # shellcheck disable=SC2046
     # nonmatching 是精确匹配路径
     zcat /reinstall-initrd | cpio -idm
-
-    # initrd 根目录中的 preseed.cfg 会被 Debian installer 自动加载。
-    # 在重启前下载并打包，避免安装器再次访问 GitHub Raw 或 jsDelivr。
-    curl -Lo "$initrd_dir/preseed.cfg" "$nextos_ks"
-    if ! grep -qx '#_preseed_V1' "$initrd_dir/preseed.cfg"; then
-        error_and_exit "Invalid Debian preconfiguration file from $nextos_ks."
-    fi
 
     curl -Lo $initrd_dir/trans.sh $confhome/trans.sh
     if ! grep -iq "$SCRIPT_VERSION" $initrd_dir/trans.sh; then
