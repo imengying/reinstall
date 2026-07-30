@@ -239,7 +239,23 @@ is_hostname_valid() {
 }
 
 is_timezone_valid() {
-    [[ "$1" =~ ^[A-Za-z0-9._+-]+(/[A-Za-z0-9._+-]+)*$ ]]
+    local timezone=$1
+    local part resolved
+    local -a parts
+
+    [[ "$timezone" =~ ^[A-Za-z0-9._+-]+(/[A-Za-z0-9._+-]+)*$ ]] || return 1
+
+    IFS=/ read -r -a parts <<<"$timezone"
+    for part in "${parts[@]}"; do
+        [ "$part" != . ] && [ "$part" != .. ] || return 1
+    done
+
+    # 极简宿主可能没有安装 tzdata；存在 zoneinfo 时同时校验实际文件和解析范围。
+    if [ -d /usr/share/zoneinfo ]; then
+        resolved=$(readlink -f "/usr/share/zoneinfo/$timezone") || return 1
+        [[ "$resolved" = /usr/share/zoneinfo/* ]] || return 1
+        [ -f "$resolved" ] || return 1
+    fi
 }
 
 get_function() {
@@ -711,21 +727,19 @@ install_pkg() {
     }
 
     is_need_reinstall() {
-        cmd=$1
+        local cmd=$1
 
         # gentoo 默认编译的 unsquashfs 不支持 xz
-        if [ "$cmd" = unsquashfs ] && is_have_cmd emerge && ! $cmd |& grep -wq xz; then
+        if [ "$cmd" = unsquashfs ] && is_have_cmd emerge && ! "$cmd" |& grep -wq xz; then
             echo "unsquashfs not supported xz. rebuilding."
             return 0
         fi
 
-        # busybox fdisk 无法显示 mbr 分区表的 id
-        if [ "$cmd" = fdisk ] && is_have_cmd apk && $cmd |& grep -wq BusyBox; then
-            return 0
-        fi
-
         # busybox grep 不支持 -oP
-        if [ "$cmd" = grep ] && is_have_cmd apk && $cmd |& grep -wq BusyBox; then
+        # busybox lsblk 不支持 -r -n --inverse
+        # busybox fdisk 无法显示 mbr 分区表的 id
+        if { [ "$cmd" = grep ] || [ "$cmd" = lsblk ] || [ "$cmd" = fdisk ]; } &&
+            is_have_cmd apk && "$cmd" --help |& grep -wq BusyBox; then
             return 0
         fi
 
@@ -781,6 +795,11 @@ check_ram() {
 
     if [ $ram_size -lt $ram_standard ]; then
         error_and_exit "Could not install $distro: RAM < $ram_standard MB."
+    fi
+
+    # Debian 9/10 的 installer 内核不支持 Btrfs swapfile，低内存时无法安全扩展内存。
+    if [ "$releasever" -le 10 ] && [ "$ram_size" -lt 512 ]; then
+        error_and_exit "Could not install Debian $releasever with Btrfs: RAM < 512 MB."
     fi
 }
 
@@ -928,6 +947,22 @@ save_password() {
     return 0
 }
 
+get_mount_source() {
+    mount | awk -v mountpoint="$1" '$3 == mountpoint { print $1; exit }'
+}
+
+get_disks_by_mountpoint() {
+    local mountpoint=$1
+    local source disks
+
+    source=$(get_mount_source "$mountpoint")
+    [ -n "$source" ] || return 1
+
+    disks=$(lsblk -rno NAME,TYPE --inverse "$source" | awk '$2 == "disk" { print $1 }' | sort -u)
+    [ -n "$disks" ] || return 1
+    printf '%s\n' "$disks"
+}
+
 # 记录主硬盘
 find_main_disk() {
     if [ -n "$main_disk" ]; then
@@ -939,21 +974,14 @@ find_main_disk() {
     # 跨硬盘lvm         显示两个硬盘                                显示/dev/mapper/centos-root
     # 跨硬盘软raid      显示两个硬盘                                显示/dev/md127
 
-    # 还有 findmnt
-
-    # 改成先检测 /boot/efi /efi /boot 分区？
-
     install_pkg lsblk
-    # 查找主硬盘时，优先查找 /boot 分区，再查找 / 分区
-    # lvm 显示的是 /dev/mapper/xxx-yyy，再用第二条命令得到sda
-    mapper=$(mount | awk '$3=="/boot" {print $1}' | grep . || mount | awk '$3=="/" {print $1}')
-    if [ -z "$mapper" ]; then
-        error_and_exit "Could not find root or boot mount source."
+    root_source=$(get_mount_source /)
+    if [ -z "$root_source" ]; then
+        error_and_exit "Could not find root mount source."
     fi
 
-    xda=$(lsblk -rn --inverse $mapper | grep -w disk | awk '{print $1}' | sort -u)
-    if [ -z "$xda" ]; then
-        error_and_exit "Could not find main disk from $mapper."
+    if ! xda=$(get_disks_by_mountpoint /); then
+        error_and_exit "Could not find main disk from $root_source."
     fi
 
     # 检测主硬盘是否横跨多个磁盘
@@ -963,6 +991,20 @@ find_main_disk() {
     else
         error_and_exit "OS across $os_across_disks_count disk: $xda"
     fi
+
+    # 独立 /boot 或 EFI 分区如果位于其它磁盘，自动选择目标盘风险过高。
+    for mountpoint in /boot /boot/efi /efi; do
+        mount_source=$(get_mount_source "$mountpoint")
+        [ -n "$mount_source" ] || continue
+
+        if ! mount_disks=$(get_disks_by_mountpoint "$mountpoint"); then
+            error_and_exit "Could not find disk for $mountpoint from $mount_source."
+        fi
+        mount_disk_count=$(awk 'NF {count++} END {print count+0}' <<<"$mount_disks")
+        if [ "$mount_disk_count" -ne 1 ] || [ "$mount_disks" != "$xda" ]; then
+            error_and_exit "$mountpoint is not on the root disk: root=$xda, $mountpoint=$mount_disks"
+        fi
+    done
 
     # 可以用 dd 找出 guid?
 
@@ -1298,7 +1340,6 @@ get_entry_name() {
 # shellcheck disable=SC2154
 build_nextos_cmdline() {
     nextos_cmdline="lowmem/low=1 auto=true priority=critical"
-    nextos_cmdline+=" url=$nextos_ks"
     nextos_cmdline+=" mirror/http/hostname=${nextos_udeb_mirror%/*}"
     nextos_cmdline+=" mirror/http/directory=/${nextos_udeb_mirror##*/}"
     nextos_cmdline+=" base-installer/kernel/image=$nextos_kernel"
@@ -1744,6 +1785,13 @@ mod_initrd() {
     # shellcheck disable=SC2046
     # nonmatching 是精确匹配路径
     zcat /reinstall-initrd | cpio -idm
+
+    # initrd 根目录中的 preseed.cfg 会被 Debian installer 自动加载。
+    # 在重启前下载并打包，避免安装器再次访问 GitHub Raw 或 jsDelivr。
+    curl -Lo "$initrd_dir/preseed.cfg" "$nextos_ks"
+    if ! grep -qx '#_preseed_V1' "$initrd_dir/preseed.cfg"; then
+        error_and_exit "Invalid Debian preconfiguration file from $nextos_ks."
+    fi
 
     curl -Lo $initrd_dir/trans.sh $confhome/trans.sh
     if ! grep -iq "$SCRIPT_VERSION" $initrd_dir/trans.sh; then

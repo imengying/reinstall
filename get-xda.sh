@@ -8,24 +8,37 @@ get_all_disks() {
 }
 
 get_xda() {
-    # 如果没找到 main_disk 或 xda
-    # 返回假的值，防止意外地格式化全部盘
     eval "$(grep -o 'extra_main_disk=[^ ]*' /proc/cmdline | sed 's/^extra_//')"
 
     if [ -z "$main_disk" ]; then
-        echo 'MAIN_DISK_NOT_FOUND'
+        echo 'Main disk ID was not provided.' >&2
         return 1
     fi
 
+    main_disk=$(printf '%s' "$main_disk" | sed 's/^0x//' | tr '[:upper:]' '[:lower:]')
+    matched_disk=
+    match_count=0
     for disk in $(get_all_disks); do
-        if fdisk -l "/dev/$disk" | grep -iq "$main_disk"; then
-            echo "$disk"
-            return
+        disk_id=$(fdisk -l "/dev/$disk" 2>/dev/null | grep 'Disk identifier' | head -1 | awk '{print $NF}' | sed 's/^0x//' | tr '[:upper:]' '[:lower:]')
+        if [ -n "$disk_id" ] && [ "$disk_id" = "$main_disk" ]; then
+            matched_disk=$disk
+            match_count=$((match_count + 1))
         fi
     done
 
-    echo 'XDA_NOT_FOUND'
-    return 1
+    case "$match_count" in
+    1)
+        echo "$matched_disk"
+        ;;
+    0)
+        echo "No disk matches ID $main_disk." >&2
+        return 1
+        ;;
+    *)
+        echo "Disk ID $main_disk is not unique ($match_count matches)." >&2
+        return 1
+        ;;
+    esac
 }
 
 get_xda

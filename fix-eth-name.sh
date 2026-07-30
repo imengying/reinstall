@@ -60,44 +60,76 @@ to_lower() {
 }
 
 get_ethx_by_mac() {
+    local mac
     mac=$(echo "$1" | to_lower)
 
-    ip -o link | grep -i "$mac" | grep -v master | awk '{print $2}' | cut -d: -f1 | grep .
+    ip -o link | awk -v target="$mac" '
+        {
+            name = $2
+            sub(/:$/, "", name)
+            has_master = 0
+            for (i = 1; i <= NF; i++) {
+                if ($i == "master") {
+                    has_master = 1
+                }
+            }
+            if (has_master) {
+                next
+            }
+            for (i = 1; i < NF; i++) {
+                if ($i == "link/ether" && tolower($(i + 1)) == target) {
+                    print name
+                    break
+                }
+            }
+        }
+    '
 }
 
 fix_ifupdown() {
     file=/etc/network/interfaces
     tmp_file=$file.tmp
 
-    rm -f "$tmp_file"
-
-    if [ -f "$file" ]; then
-        while IFS= read -r line; do
-            del_this_line=false
-            if [[ "$line" = "# mac "* ]]; then
-                ethx=
-                if mac=$(echo "$line" | awk '{print $NF}'); then
-                    ethx=$(get_ethx_by_mac "$mac") || true
-                fi
-                del_this_line=true
-            elif [[ "$line" = "iface e"* ]] ||
-                [[ "$line" = "auto e"* ]] ||
-                [[ "$line" = "allow-hotplug e"* ]]; then
-                if [ -n "$ethx" ]; then
-                    line=$(echo "$line" | awk "{\$2=\"$ethx\"; print \$0}")
-                fi
-            elif [[ "$line" = *" dev e"* ]]; then
-                if [ -n "$ethx" ]; then
-                    line=$(echo "$line" | sed -E "s/[^ ]*$/$ethx/")
-                fi
-            fi
-            if ! $del_this_line; then
-                echo "$line" >>"$tmp_file"
-            fi
-        done <"$file"
-
-        mv "$tmp_file" "$file"
+    if ! [ -f "$file" ]; then
+        echo "$file does not exist." >&2
+        return 1
     fi
+
+    rm -f "$tmp_file"
+    cp -p "$file" "$tmp_file"
+    true >"$tmp_file"
+
+    ethx=
+    while IFS= read -r line; do
+        del_this_line=false
+        if [[ "$line" = "# mac "* ]]; then
+            mac=$(echo "$line" | awk '{print $NF}')
+            matches=$(get_ethx_by_mac "$mac") || true
+            match_count=$(printf '%s\n' "$matches" | awk 'NF { count++ } END { print count+0 }')
+            if [ "$match_count" -ne 1 ]; then
+                echo "Expected one interface for MAC $mac, found $match_count." >&2
+                rm -f "$tmp_file"
+                return 1
+            fi
+            ethx=$(printf '%s\n' "$matches" | awk 'NF { print; exit }')
+            del_this_line=true
+        elif [[ "$line" = "iface e"* ]] ||
+            [[ "$line" = "auto e"* ]] ||
+            [[ "$line" = "allow-hotplug e"* ]]; then
+            if [ -n "$ethx" ]; then
+                line=$(printf '%s\n' "$line" | awk -v ethx="$ethx" '{$2=ethx; print}')
+            fi
+        elif [[ "$line" = *" dev e"* ]]; then
+            if [ -n "$ethx" ]; then
+                line=$(printf '%s\n' "$line" | awk -v ethx="$ethx" '{$NF=ethx; print}')
+            fi
+        fi
+        if ! $del_this_line; then
+            printf '%s\n' "$line" >>"$tmp_file"
+        fi
+    done <"$file"
+
+    mv "$tmp_file" "$file"
 }
 
 fix_ifupdown
