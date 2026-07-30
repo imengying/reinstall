@@ -19,7 +19,7 @@ get_xda() {
     matched_disk=
     match_count=0
     for disk in $(get_all_disks); do
-        disk_id=$(fdisk -l "/dev/$disk" 2>/dev/null | grep 'Disk identifier' | head -1 | awk '{print $NF}' | sed 's/^0x//' | tr '[:upper:]' '[:lower:]')
+        disk_id=$(fdisk -l "/dev/$disk" 2>/dev/null | grep 'Disk identifier' | head -1 | sed 's/.*[[:space:]]//' | sed 's/^0x//' | tr '[:upper:]' '[:lower:]')
         if [ -n "$disk_id" ] && [ "$disk_id" = "$main_disk" ]; then
             matched_disk=$disk
             match_count=$((match_count + 1))
