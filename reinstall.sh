@@ -797,8 +797,8 @@ check_ram() {
         error_and_exit "Could not install $distro: RAM < $ram_standard MB."
     fi
 
-    # Debian 9/10 的 installer 内核不支持 Btrfs swapfile，低内存时无法安全扩展内存。
-    if [ "$releasever" -le 10 ] && [ "$ram_size" -lt 512 ]; then
+    # Debian 9-11 的 installer 不支持安全创建 Btrfs swapfile，低内存时无法扩展内存。
+    if [ "$releasever" -le 11 ] && [ "$ram_size" -lt 512 ]; then
         error_and_exit "Could not install Debian $releasever with Btrfs: RAM < 512 MB."
     fi
 }
