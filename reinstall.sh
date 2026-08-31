@@ -93,6 +93,7 @@ Usage: ./reinstall.sh debian [9|10|11|12|13]
                        [--ssh-port  PORT]
                        [--hostname  NAME]
                        [--timezone  TIMEZONE]
+                       [--zstd-level LEVEL]
                        [--bbr]
                        [--ethx]
                        [--jsdelivr]
@@ -222,6 +223,10 @@ is_use_firmware() {
 
 is_digit() {
     [[ "$1" =~ ^[0-9]+$ ]]
+}
+
+is_zstd_level_valid() {
+    [[ "$1" =~ ^([1-9]|1[0-5])$ ]]
 }
 
 is_port_valid() {
@@ -1806,6 +1811,7 @@ This script is outdated, please download reinstall.sh again.
         save_password $initrd_dir/configs
     fi
     printf '%s\n' "$nextos_releasever" >$initrd_dir/configs/releasever
+    printf '%s\n' "$zstd_level" >$initrd_dir/configs/zstd_level
 
     mod_initrd_debian
 
@@ -1909,6 +1915,7 @@ for o in force-cn \
     ssh-port: \
     hostname: \
     timezone: \
+    zstd-level: \
     bbr \
     ethx \
     jsdelivr \
@@ -2026,6 +2033,11 @@ EOF
         timezone=$2
         shift 2
         ;;
+    --zstd-level)
+        is_zstd_level_valid "$2" || error_and_exit "Invalid $1 value: $2 (expected 1-15)"
+        zstd_level=$2
+        shift 2
+        ;;
     --bbr)
         bbr=1
         shift
@@ -2051,6 +2063,11 @@ done
 
 # 检查目标系统名
 verify_os_name "$@"
+
+# Btrfs 从 Linux 5.1 起支持在 mount 选项中指定 Zstd 等级。
+if [ -n "$zstd_level" ] && [ "$releasever" -le 10 ]; then
+    error_and_exit "--zstd-level requires Debian 11 or later."
+fi
 
 # 不支持容器虚拟化
 assert_not_in_container

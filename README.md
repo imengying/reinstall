@@ -9,10 +9,10 @@
 | 特性 | 描述 |
 | :--- | :--- |
 | 🐧 **纯净构建** | 仅安装最核心组件，无任何多余预装软件。 |
-| 💾 **Btrfs + Zstd** | 自动开启 `compress=zstd`，大幅节省空间并延长闪存寿命。 |
+| 💾 **Btrfs + Zstd** | 自动开启 `compress=zstd`，可设置压缩等级，大幅节省空间并延长闪存寿命。 |
 | 🔒 **安全强化** | 默认生成高强度随机密码（`/dev/urandom`），拒绝弱口令风险。 |
 | ☁️ **云端适配** | 自动修复 Azure 加速网络问题；针对部分云厂商的 DHCP/RA 行为做兼容处理。 |
-| 🔧 **灵活配置** | 支持自定义 SSH 端口、主机名、时区、BBR、传统网卡命名、导入 SSH 公钥。 |
+| 🔧 **灵活配置** | 支持自定义 SSH 端口、主机名、时区、Zstd 等级、BBR、传统网卡命名、导入 SSH 公钥。 |
 
 
 ## 下载
@@ -59,6 +59,9 @@ bash reinstall.sh debian --hostname my-debian
 # 指定时区
 bash reinstall.sh debian --timezone Asia/Shanghai
 
+# 设置 Zstd 压缩等级 (1-15，默认等级 3，仅支持 Debian 11-13；等级越高越消耗 CPU 和内存)
+bash reinstall.sh debian --zstd-level 6
+
 # 启用 BBR (默认不启用)
 bash reinstall.sh debian --bbr
 
@@ -81,7 +84,7 @@ bash reinstall.sh debian --ssh-key "ssh-ed25519 AAAA..."
 | :--- | :--- |
 | **默认用户** | `root` |
 | **默认密码** | 安装结束时在终端**随机生成并显示**，请务必截图或记录！ |
-| **文件系统** | **Btrfs** (Zstd 压缩) |
+| **文件系统** | **Btrfs**（Zstd 压缩，默认等级 3；Debian 11–13 可设置 1–15） |
 | **分区方案** | 自动扩容根分区以利用所有空间，**无 Swap 分区**。 |
 | **最低内存** | Debian 9–11：512MB；Debian 12–13：256MB。 |
 | **目标磁盘** | `/`、独立 `/boot` 和 EFI 分区必须位于同一块物理磁盘，否则脚本会停止。 |
