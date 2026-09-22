@@ -118,6 +118,18 @@ apk add curl grep openssl bash
 - ✅ 脚本异常退出：清理所有临时文件
 - ✅ 用户中断（Ctrl+C）：清理所有临时文件
 
+## LXC 虚拟机
+
+专门为LXC设计的Alpine重装脚本
+GitHub Raw：
+```bash
+curl -so alpine.sh https://raw.githubusercontent.com/imengying/reinstall/main/alpine.sh && chmod u+x alpine.sh && ./alpine.sh
+```
+jsDelivr：
+```bash
+curl -so alpine.sh https://cdn.jsdelivr.net/gh/imengying/reinstall/main/alpine.sh && chmod u+x alpine.sh && ./alpine.sh
+```
+
 ## 📜 许可证
 
 本项目遵循 [GNU GPL v3.0](LICENSE) 开源协议。
