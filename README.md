@@ -121,11 +121,14 @@ apk add curl grep openssl bash
 ## LXC 虚拟机
 
 专门为LXC设计的Alpine重装脚本
+
 GitHub Raw：
+
 ```bash
 curl -so alpine.sh https://raw.githubusercontent.com/imengying/reinstall/main/alpine.sh && chmod u+x alpine.sh && ./alpine.sh
 ```
 jsDelivr：
+
 ```bash
 curl -so alpine.sh https://cdn.jsdelivr.net/gh/imengying/reinstall/main/alpine.sh && chmod u+x alpine.sh && ./alpine.sh
 ```
