@@ -97,11 +97,11 @@ choose_password() {
     local pass1="" pass2=""
 
     msg ""
-    msg "设置 root 密码（直接回车则沿用当前系统的 root 密码）"
+    msg "设置 root 密码（回车则为原密码）"
 
     if [ -r /dev/tty ]; then
         while :; do
-            printf '新密码（不显示，直接回车跳过）: '
+            printf '新密码: '
             read -r -s pass1 < /dev/tty || pass1=""
             printf '\n'
 
@@ -232,8 +232,15 @@ esac
 
 DOWNLOAD_URL="${SERVER%/}${IMAGE_PATH%/}/rootfs.tar.xz"
 
-curl -fsI "$DOWNLOAD_URL" >/dev/null 2>&1 ||
-    fail "Alpine rootfs 不可用: $DOWNLOAD_URL"
+# 取 Content-Length，失败也无所谓（后面会退回"只显示已下载字节"模式）
+TOTAL_SIZE="$(
+    curl -fsIL "$DOWNLOAD_URL" 2>/dev/null |
+        awk 'tolower($1)=="content-length:" { v=$2 } END { gsub(/\r/,"",v); print v }' ||
+    true
+)"
+case "$TOTAL_SIZE" in
+    ''|*[!0-9]*) TOTAL_SIZE=0 ;;
+esac
 
 # ============================================================
 # 保存当前网络 / 主机名配置
@@ -332,9 +339,8 @@ fi
 # ============================================================
 # 下载 Alpine
 #
-# 先把 rootfs 下载到临时文件，再单独解压：
-#   - curl 的 stdout 不再被重定向到 tar，进度条可以在同一行原地刷新
-#   - 解压阶段给一行提示，避免误以为卡住
+# 关键：不要用 curl --progress-bar 直接输出到终端（在非 tty 或
+# 宽度异常时会换行刷屏）。改为后台下载 + 主进程用 \r 原地刷新。
 # ============================================================
 
 msg "[5/8] 下载 Alpine $ALPINE_VERSION rootfs..."
@@ -343,8 +349,36 @@ mkdir -p "$ROOTFS"
 
 TAR_FILE="$(mktemp)"
 
-curl -fL --progress-bar -o "$TAR_FILE" "$DOWNLOAD_URL" ||
+curl -fsSL -o "$TAR_FILE" "$DOWNLOAD_URL" &
+CURL_PID=$!
+
+# 确保 curl 意外退出时也能清理
+trap 'kill "$CURL_PID" 2>/dev/null || true; trap - INT TERM; exit 130' INT TERM
+
+# 进度刷新循环
+LAST_PRINT=0
+while kill -0 "$CURL_PID" 2>/dev/null; do
+    CUR_SIZE="$(stat -c %s "$TAR_FILE" 2>/dev/null || echo 0)"
+    if [ "$TOTAL_SIZE" -gt 0 ] 2>/dev/null; then
+        PERCENT=$(( CUR_SIZE * 100 / TOTAL_SIZE ))
+        printf '\r下载中... %3d%%  (%s / %s 字节)' \
+            "$PERCENT" "$CUR_SIZE" "$TOTAL_SIZE"
+    else
+        printf '\r下载中... %s 字节' "$CUR_SIZE"
+    fi
+    sleep 0.3
+done
+
+# 等 curl 结束并拿到退出码
+if wait "$CURL_PID"; then
+    :
+else
+    printf '\n'
     fail "下载 Alpine rootfs 失败。"
+fi
+
+# 清掉进度行
+printf '\r%*s\r' 80 ''
 
 msg "解压 rootfs..."
 tar -xJf "$TAR_FILE" -C "$ROOTFS" ||
