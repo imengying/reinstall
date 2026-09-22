@@ -10,11 +10,7 @@
 #   - 可设置新的 root 密码，直接回车则沿用当前系统的密码
 #   - 保留 /root/.ssh、主机名、DNS
 #   - 自动生成 Alpine ifupdown-ng 网络配置
-#   - 启动时问一次版本和密码，之后全程无交互；关键步骤会在终端
-#     打印进度，不会让人误以为脚本卡住了
-#
-# 完整过程日志：/root/alpine-reinstall.log
-# （出错时终端会打印一行原因；想看细节可以 nano /root/alpine-reinstall.log）
+#   - 启动时问一次版本和密码，之后全程无交互
 #
 # 警告：当前系统的用户空间会被完全替换，所有现有文件都会被删除。
 #
@@ -23,36 +19,25 @@ set -Eeuo pipefail
 
 SERVER="https://images.linuxcontainers.org"
 ROOTFS="/x"
-LOG="/root/alpine-reinstall.log"
 
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-# ------------------------------------------------------------
-# 输出处理：fd3 = 真正的终端；fd1/fd2 默认重定向进日志文件，
-# 关键步骤用 msg() 显式打印到终端，避免看起来像卡住了。
-# ------------------------------------------------------------
-: > "$LOG"
-exec 3>&1
-exec >>"$LOG" 2>&1
-
-msg() {   # 终端 + 日志
-    printf '%s\n' "$*" >&3
+msg() {
     printf '%s\n' "$*"
 }
 
-fail() {  # 终端 + 日志，然后退出
-    printf '\n错误：%s\n' "$*" >&3
+fail() {
     printf '\n错误：%s\n' "$*"
     exit 1
 }
 
-# 任何未被显式 `|| fail ...` 捕获的失败命令，都会在这里报出具体的
-# 行号和命令，避免再出现"脚本莫名其妙退出、什么提示都没有"的情况。
+# 捕获未显式处理的失败命令，给出具体行号和命令。
 trap 'fail "第 $LINENO 行执行失败: $BASH_COMMAND"' ERR
 
 cleanup() {
     rm -f "${INDEX_FILE:-}" 2>/dev/null || true
     rm -f "${NET_FILE:-}" 2>/dev/null || true
+    rm -f "${TAR_FILE:-}" 2>/dev/null || true
 
     if mountpoint -q "$ROOTFS/oldroot" 2>/dev/null; then
         umount "$ROOTFS/oldroot" 2>/dev/null || true
@@ -75,7 +60,7 @@ choose_version() {
     local choice=""
 
     msg ""
-    msg "请选择要安装的 Alpine 版本："
+    msg "请选择："
     msg "  1) 3.21"
     msg "  2) 3.22"
     msg "  3) 3.23"
@@ -83,19 +68,17 @@ choose_version() {
 
     if [ -r /dev/tty ]; then
         while :; do
-            printf '请输入数字 [1-4，直接回车默认 4]: ' >&3
+            printf '请输入选择 [默认 4]: '
             read -r choice < /dev/tty || choice=""
             case "$choice" in
                 1) ALPINE_VERSION="3.21"; break ;;
                 2) ALPINE_VERSION="3.22"; break ;;
                 3) ALPINE_VERSION="3.23"; break ;;
                 4|"") ALPINE_VERSION="3.24"; break ;;
-                *) printf '无效选项，请输入 1-4。\n' >&3 ;;
+                *) printf '无效选择，请输入 1-4。\n' ;;
             esac
         done
     else
-        # 没有可交互的终端（比如完全自动化运行），直接用默认版本，
-        # 不要卡在这里等一个永远不会来的输入。
         ALPINE_VERSION="3.24"
     fi
 
@@ -118,18 +101,18 @@ choose_password() {
 
     if [ -r /dev/tty ]; then
         while :; do
-            printf '新密码（不显示，直接回车跳过）: ' >&3
+            printf '新密码（不显示，直接回车跳过）: '
             read -r -s pass1 < /dev/tty || pass1=""
-            printf '\n' >&3
+            printf '\n'
 
             if [ -z "$pass1" ]; then
                 msg "将沿用当前的 root 密码。"
                 return 0
             fi
 
-            printf '再输入一遍确认: ' >&3
+            printf '再输入一遍确认: '
             read -r -s pass2 < /dev/tty || pass2=""
-            printf '\n' >&3
+            printf '\n'
 
             if [ "$pass1" = "$pass2" ]; then
                 NEW_ROOT_PASSWORD="$pass1"
@@ -137,10 +120,9 @@ choose_password() {
                 return 0
             fi
 
-            printf '两次输入不一致，请重新输入。\n' >&3
+            printf '两次输入不一致，请重新输入。\n'
         done
     fi
-    # 没有可交互终端时保持沿用原密码，不在这里卡住。
 }
 
 choose_password
@@ -255,11 +237,6 @@ curl -fsI "$DOWNLOAD_URL" >/dev/null 2>&1 ||
 
 # ============================================================
 # 保存当前网络 / 主机名配置
-#
-# 注意：下面两个函数末尾都加了 `|| true`。很多 LXC 机器没有 IPv6
-# 默认路由（或 IPv6 整个被禁用），这时 `ip -6 route show default`
-# 会返回非零状态。配合 set -e + pipefail，未加保护的赋值语句会让
-# 脚本直接静默退出——这是旧版本卡在这一步的真正原因。
 # ============================================================
 
 msg "[4/8] 保存当前网络/主机名配置..."
@@ -354,16 +331,27 @@ fi
 
 # ============================================================
 # 下载 Alpine
+#
+# 先把 rootfs 下载到临时文件，再单独解压：
+#   - curl 的 stdout 不再被重定向到 tar，进度条可以在同一行原地刷新
+#   - 解压阶段给一行提示，避免误以为卡住
 # ============================================================
 
 msg "[5/8] 下载 Alpine $ALPINE_VERSION rootfs..."
 
 mkdir -p "$ROOTFS"
 
-# 这一步耗时最长，用 --progress-bar 把下载进度直接打到终端，
-# 免得看起来像卡住了；具体字节数等细节仍然写进日志。
-curl -fL --progress-bar "$DOWNLOAD_URL" 2>&3 | tar -xJ -C "$ROOTFS" ||
-    fail "下载或解压 Alpine rootfs 失败。"
+TAR_FILE="$(mktemp)"
+
+curl -fL --progress-bar -o "$TAR_FILE" "$DOWNLOAD_URL" ||
+    fail "下载 Alpine rootfs 失败。"
+
+msg "解压 rootfs..."
+tar -xJf "$TAR_FILE" -C "$ROOTFS" ||
+    fail "解压 Alpine rootfs 失败。"
+
+rm -f "$TAR_FILE"
+TAR_FILE=""
 
 [ -f "$ROOTFS/etc/alpine-release" ] || fail "下载的 rootfs 无效。"
 
@@ -402,8 +390,6 @@ chroot "$ROOTFS" /bin/sh -c '
     apk add --no-cache bash openssh ifupdown-ng ca-certificates shadow
 ' || fail "在新系统中安装软件包失败。"
 
-# shadow 包装好之后才有 chpasswd 可用；只有输入了新密码才会走到这里，
-# 直接回车（NEW_ROOT_PASSWORD 为空）就保留前面从旧系统拷贝的密码。
 if [ -n "$NEW_ROOT_PASSWORD" ]; then
     printf 'root:%s\n' "$NEW_ROOT_PASSWORD" | chroot "$ROOTFS" chpasswd ||
         fail "设置新密码失败。"
@@ -477,7 +463,7 @@ fi
 sync
 
 msg ""
-msg "Alpine $ALPINE_VERSION 安装完成，请执行以下命令重启："
+msg "Alpine $ALPINE_VERSION 安装完成，请重启："
 msg ""
 msg "    reboot -f"
 msg ""
