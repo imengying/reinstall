@@ -7,6 +7,8 @@ Before=network.target
 
 [Service]
 Type=oneshot
+StandardOutput=journal+console
+StandardError=journal+console
 ExecStart=/usr/bin/env bash /fix-eth-name.sh
 ExecStart=/usr/bin/env sh -c 'rm -f /fix-eth-name.sh /etc/systemd/system/fix-eth-name.service /etc/systemd/system/multi-user.target.wants/fix-eth-name.service'
 

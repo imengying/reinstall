@@ -68,6 +68,9 @@ bash reinstall.sh debian --bbr
 # 使用传统网卡命名 eth0、eth1
 bash reinstall.sh debian --ethx
 
+# 使用普通内核（需要更多内存；内存不超过 256MB 时不可用）
+bash reinstall.sh debian --no-cloud-kernel
+
 # 使用 jsDelivr 下载项目配置和辅助文件
 bash reinstall.sh debian --jsdelivr
 
@@ -86,8 +89,12 @@ bash reinstall.sh debian --ssh-key "ssh-ed25519 AAAA..."
 | **默认密码** | 安装结束时在终端**随机生成并显示**，请务必截图或记录！ |
 | **文件系统** | **Btrfs**（Zstd 压缩，默认等级 3；Debian 11–13 可设置 1–15） |
 | **分区方案** | 自动扩容根分区以利用所有空间，**无 Swap 分区**。 |
-| **最低内存** | Debian 9–11：512MB；Debian 12–13：256MB。 |
+| **最低内存** | Debian 9–11：512MB；Debian 12–13：256MB。内存不超过 256MB 时，硬件必须支持云内核，不能使用 `--no-cloud-kernel`。 |
 | **目标磁盘** | `/`、独立 `/boot` 和 EFI 分区必须位于同一块物理磁盘，否则脚本会停止。 |
+
+Debian 9–11 使用 Freexian ELTS 安装源；Debian 11 的官方 LTS 已于 2026 年 8 月结束。默认仍安装最新的 Debian 13。
+
+安装界面会同步到可用的 VNC/本地终端和串口（Debian 10–13）；安装日志位于 tty4。网络探测会在 IP 可达但域名访问失败时尝试公共 DNS，保留原有多 IPv6 地址配置。Debian 13 云内核支持 AHCI，腾讯云磁盘会自动限制单次 I/O 大小以兼容其存储设备。
 
 ## ⚙️ 前置依赖
 

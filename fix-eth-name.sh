@@ -39,6 +39,8 @@ while true; do
 
     old_state=$new_state
 
+    echo "Waiting for the NICs to be stable (${stable_count}s/${stable_wait}s, ${check_count}s/${max_wait}s)..."
+
     if $has_eth && [ "$stable_count" -ge "$stable_wait" ]; then
         break
     fi

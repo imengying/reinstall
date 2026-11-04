@@ -12,7 +12,7 @@ jsdelivr_confhome=https://cdn.jsdelivr.net/gh/imengying/reinstall@main
 confhome=$github_confhome
 
 # 用于判断 reinstall.sh 和 trans.sh 是否兼容
-SCRIPT_VERSION=4BACD833-A585-23BA-6CBB-9AA4E08E0003
+SCRIPT_VERSION=4BACD833-A585-23BA-6CBB-9AA4E08E0004
 
 # 强制 linux 程序输出英文，防止 grep 不到想要的内容
 # https://www.gnu.org/software/gettext/manual/html_node/The-LANGUAGE-variable.html
@@ -94,6 +94,7 @@ Usage: ./reinstall.sh debian [9|10|11|12|13]
                        [--hostname  NAME]
                        [--timezone  TIMEZONE]
                        [--zstd-level LEVEL]
+                       [--no-cloud-kernel]
                        [--bbr]
                        [--ethx]
                        [--jsdelivr]
@@ -392,7 +393,7 @@ setos() {
     # 后续如出现其它发行版名称，通常是宿主兼容或上游遗留注释。
     setos_debian() {
         is_debian_elts() {
-            [ "$releasever" -le 10 ]
+            [ "$releasever" -le 11 ]
         }
 
         # 用此标记要是否 elts, 用于安装后修改 elts/etls-cn 源
@@ -461,7 +462,7 @@ Continue?
             # cloud.debian.org 同样在瑞典，不是 cdn
         fi
 
-        if is_virt; then
+        if [ "$no_cloud_kernel" != 1 ] && is_virt; then
             flavour=-cloud
         else
             flavour=
@@ -500,6 +501,10 @@ Continue?
 
     # Debian <=256M 必须使用云内核，否则不够内存
     if [ "$ram_size" -le 256 ]; then
+        case "$nextos_kernel" in
+        linux-image-cloud-*) ;;
+        *) error_and_exit "RAM <= 256 MB requires a cloud kernel; cannot use the selected normal kernel." ;;
+        esac
         exit_if_cant_use_cloud_kernel
     fi
 
@@ -766,6 +771,13 @@ is_valid_ram_size() {
     is_digit "$1" && [ "$1" -gt 0 ]
 }
 
+parse_dmidecode_ram() {
+    awk '$1 == "Size:" && $2 ~ /^[0-9]+$/ {
+        if ($3 == "GB" || $3 == "GiB") sum += $2 * 1024
+        else if ($3 == "MB" || $3 == "MiB") sum += $2
+    } END { if (sum > 0) printf "%.0f\n", sum }'
+}
+
 check_ram() {
     ram_standard=256
 
@@ -775,7 +787,7 @@ check_ram() {
 
     if ! is_valid_ram_size "$ram_size"; then
         install_pkg dmidecode
-        ram_size=$(dmidecode -t 17 | grep "Size.*[GM]B" | awk '{if ($3=="GB") s+=$2*1024; else s+=$2} END {if(s>0) print s}')
+        ram_size=$(dmidecode -t 17 | parse_dmidecode_ram)
     fi
 
     if ! is_valid_ram_size "$ram_size"; then
@@ -1384,10 +1396,34 @@ mkdir_clear() {
     mkdir -p $dir
 }
 
-mod_initrd_debian() {
-    # 允许配置 IPv4 onlink 网关
-    sed -Ei 's,&&( onlink=),||\1,' etc/udhcpc/default.script
+mod_inittab_for_screen() {
+    # reopen-console 已创建主终端；其他可用终端共享同一安装界面。
+    for tty in tty1 ttyS0 ttyAMA0; do
+        if [ "$tty" = tty1 ] && grep -q '^tty[01]:' /etc/inittab; then
+            continue
+        fi
+        if ! grep -q "^$tty:" /etc/inittab && [ -c "/dev/$tty" ] &&
+            { stty -g -F "/dev/$tty" >/dev/null || echo >"/dev/$tty"; } 2>/dev/null; then
+            echo "$tty::respawn:screen -x root/ -p 1" >>/etc/inittab
+        fi
+    done
+}
 
+force_serial_if_exists() {
+    # 较小的串口界面通过 screen 同步到 VNC，避免分辨率/UTF-8 导致乱码。
+    c_tty=$(grep -F '(EC' /proc/consoles | cut -d' ' -f1)
+    case "$c_tty" in ttyAMA0 | ttyS0) ;; *) c_tty= ;; esac
+    for tty in $c_tty ttyAMA0 ttyS0; do
+        if [ -c "/dev/$tty" ] &&
+            { stty -g -F "/dev/$tty" >/dev/null || echo >"/dev/$tty"; } 2>/dev/null; then
+            consoles=$tty
+            preferred=$tty
+            break
+        fi
+    done
+}
+
+mod_debian_console() {
     # 强制 Debian installer 使用 screen。bterm/串口选择在部分 VNC 环境下只显示内核日志，
     # 后续安装界面会跑到串口，导致 VNC 看不到进度。
     menu_script=$(first_existing_path \
@@ -1399,6 +1435,27 @@ mod_initrd_debian() {
         echo 'if true  || : \' |
             insert_into_file "$menu_script" before 'if [ -x "$screen_bin" -a' -F || true
     fi
+
+    # Debian 9 尚未在 reopen-console 中维护 inittab。
+    if [ "$releasever" -ge 10 ]; then
+        local reopen_console term_script
+        reopen_console=$(first_existing_path sbin/reopen-console usr/sbin/reopen-console)
+        term_script=$(first_existing_path usr/lib/debian-installer.d/S40term-linux lib/debian-installer.d/S40term-linux)
+        get_function_content mod_inittab_for_screen |
+            insert_into_file "$reopen_console" before 'kill -HUP 1' -F
+        get_function_content force_serial_if_exists |
+            insert_into_file "$reopen_console" before 'if [ $PRESEEDING = 1 ]; then' -F
+        # 保留本地 usr/lib 与 lib 路径兼容；tty1 同步显示安装界面。
+        echo 'if false && : \' |
+            insert_into_file "$term_script" before 'if [ -d /usr/lib/locale/C.UTF-8 ]; then' -F
+    fi
+}
+
+mod_initrd_debian() {
+    # 允许配置 IPv4 onlink 网关
+    sed -Ei 's,&&( onlink=),||\1,' etc/udhcpc/default.script
+
+    mod_debian_console
 
     # 改写 netcfg.postinst，在安装期采集并固化网络配置
     netcfg() {
@@ -1628,7 +1685,7 @@ EOF
             xen_scsifront) extra_drivers+=" xen-scsifront" ;;
             virtio_blk | virtio_scsi | hv_storvsc | vmw_pvscsi) extra_drivers+=" $driver" ;;
             pata_legacy) sed -i '/^pata-modules/d' $net_retriever ;; # 属于 pata-modules
-            ata_piix) sed -i '/^sata-modules/d' $net_retriever ;;    # 属于 sata-modules
+            ata_piix | ahci) sed -i '/^sata-modules/d' $net_retriever ;; # AHCI 依赖 libahci，安装整个 sata udeb
             ata_generic) ;;                                          # 属于 ata-modules，不用处理，因为我们设置强制安装了 ata-modules
             esac
         done
@@ -1714,9 +1771,12 @@ exit_if_cant_use_cloud_kernel() {
 can_use_cloud_kernel() {
     # initrd 下也要使用，不要用 <<<
 
-    # 有些虚拟机用了 ahci，但云内核没有 ahci 驱动
+    # Debian 13 起云内核包含 AHCI；旧版本仍需使用普通内核。
     cloud_eth_modules='ena|gve|mana|virtio_net|xen_netfront|hv_netvsc|vmxnet3|mlx4_en|mlx4_core|mlx5_core|ixgbevf'
     cloud_blk_modules='ata_generic|ata_piix|pata_legacy|nvme|virtio_blk|virtio_scsi|xen_blkfront|xen_scsifront|hv_storvsc|vmw_pvscsi'
+    if [ "$releasever" -ge 13 ]; then
+        cloud_blk_modules="$cloud_blk_modules|ahci"
+    fi
 
     # disk
     drivers="$(get_disk_drivers $1)"
@@ -1750,6 +1810,7 @@ create_can_use_cloud_kernel_sh() {
         $(get_function get_disk_drivers)
         $(get_function can_use_cloud_kernel)
 
+        releasever="$releasever"
         can_use_cloud_kernel "\$@"
 EOF
 }
@@ -1870,10 +1931,8 @@ remove_useless_initrd_files() {
             net/mac80211 \
             net/wireless \
             net/bluetooth \
-            drivers/hid \
             drivers/mmc \
             drivers/mtd \
-            drivers/usb \
             drivers/ssb \
             drivers/mfd \
             drivers/bcma \
@@ -1885,7 +1944,6 @@ remove_useless_initrd_files() {
             drivers/net/bonding \
             drivers/net/wireless \
             drivers/input/rmi4 \
-            drivers/input/keyboard \
             drivers/input/touchscreen \
             drivers/bus/mhi \
             drivers/char/pcmcia \
@@ -1916,6 +1974,7 @@ for o in force-cn \
     hostname: \
     timezone: \
     zstd-level: \
+    no-cloud-kernel \
     bbr \
     ethx \
     jsdelivr \
@@ -2040,6 +2099,10 @@ EOF
         ;;
     --bbr)
         bbr=1
+        shift
+        ;;
+    --no-cloud-kernel)
+        no_cloud_kernel=1
         shift
         ;;
     --ethx)
